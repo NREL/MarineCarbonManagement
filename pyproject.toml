@@ -1,0 +1,15 @@
+[project]
+name = "mcm"
+description = "marine carbon management package"
+version = "0.1.0"
+license = {file = "LICENSE"}
+authors = [
+    { name = "Kaitlin Brunik", email = "kaitlin.brunik@nrel.gov" },
+    { name = "James Niffenegger", email = "james.niffenegger@nrel.gov" }
+]
+dependencies = [
+    "attrs",
+    "matplotlib",
+    "numpy",
+    "pandas",
+]
