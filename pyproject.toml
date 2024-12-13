@@ -13,3 +13,13 @@ dependencies = [
     "numpy",
     "pandas",
 ]
+keywords = [
+    "python3",
+    "marine-carbon-removal",
+    "direct-ocean-capture",
+]
+[project.optional-dependencies]
+develop = [
+    "pytest",
+    "pytest-subtests",
+]
