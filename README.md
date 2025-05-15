@@ -48,6 +48,12 @@ The marine carbon management software is an open-source Python based software th
        pip install -e ".[develop]"
        ```
 
+    - If you also want development dependencies for running tests:  
+
+       ```bash
+       pip install -e ".[examples]"
+       ```
+
     - In one step, all dependencies can be installed as:
 
       ```bash
