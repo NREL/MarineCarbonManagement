@@ -1,8 +1,10 @@
 # MarineCarbonManagement
 [![License](https://img.shields.io/badge/License-BSD%203--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause)
-![Static Badge](https://img.shields.io/badge/Publication-Electrochemical_Direct_Ocean_Capture-brightgreen?link=https%3A%2F%2Fwww.nrel.gov%2Fdocs%2Ffy24osti%2F90673.pdf)
-![Static Badge](https://img.shields.io/badge/SWR-24--122-purple)
 
+
+[![Link](https://img.shields.io/badge/Publication-Electrochemical_Direct_Ocean_Capture-brightgreen)](https://www.nrel.gov/docs/fy24osti/90673.pdf)
+
+![Static Badge](https://img.shields.io/badge/SWR-24--122-purple)
 
 The marine carbon management software is an open-source Python based software that contains generic models for marine carbon capture. More models are under development and will be added soon. 
 
@@ -44,6 +46,12 @@ The marine carbon management software is an open-source Python based software th
 
        ```bash
        pip install -e ".[develop]"
+       ```
+
+    - If you also want development dependencies for running tests:  
+
+       ```bash
+       pip install -e ".[examples]"
        ```
 
     - In one step, all dependencies can be installed as:
