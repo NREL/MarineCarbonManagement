@@ -6,6 +6,7 @@ __maintainer__ = "Kaitlin Brunik"
 __email__ = ("james.niffenegger", "kaitlin.brunik@nrel.gov")
 
 import math
+import warnings
 import numpy as np
 import pandas as pd
 import PyCO2SYS as pyco2
@@ -53,7 +54,7 @@ class OAEInputs:
     """
     P_ed1: float = field(default=None)
     Q_ed1: float = field(default=None)
-    N_edMin: int = 1
+    N_edMin: int = field(default=1, validator=gt_zero)
     P_edMax: float = field(default=250e4, validator=gt_zero)
     N_edMax: int = field(default=10, validator=gt_zero)
     E_HCl: float = field(default=None)
@@ -169,6 +170,243 @@ class SeaWaterInputs:
             temperature=self.tempC,
         )
         self.ta_i = umol_per_kg_to_m(results["alkalinity"])
+
+@define
+class PumpInputs:
+    """
+    A class to define the input parameters for various pumps in the system.
+
+    Attributes:
+        y_pump (float): The constant efficiency of the pump. Default is 0.9.
+        p_o_min_bar (float): The minimum pressure (in bar) for seawater intake with filtration. Default is 0.1.
+        p_o_max_bar (float): The maximum pressure (in bar) for seawater intake with filtration. Default is 0.5.
+        p_ed_min_bar (float): The minimum pressure (in bar) for ED (Electrodialysis) units. Default is 0.1.
+        p_ed_max_bar (float): The maximum pressure (in bar) for ED (Electrodialysis) units. Default is 0.5.
+        p_a_min_bar (float): The minimum pressure (in bar) for pumping acid. Default is 0.1.
+        p_a_max_bar (float): The maximum pressure (in bar) for pumping acid. Default is 0.5.
+        p_i_min_bar (float): The minimum pressure (in bar) for pumping seawater for acid addition. Default is 0.
+        p_i_max_bar (float): The maximum pressure (in bar) for pumping seawater for acid addition. Default is 0.
+        p_b_min_bar (float): The minimum pressure (in bar) for pumping base. Default is 0.1.
+        p_b_max_bar (float): The maximum pressure (in bar) for pumping base. Default is 0.5.
+        p_f_min_bar (float): The minimum pressure (in bar) for released seawater. Default is 0.
+        p_f_max_bar (float): The maximum pressure (in bar) for released seawater. Default is 0.
+        p_vacCO2_min_bar (float): The minimum vacuum pressure (in bar). Default is 0.1.
+        p_vacCO2_max_bar (float): The maximum vacuum pressure (in bar). Default is 0.2.
+    """
+
+    y_pump: float = 0.9
+    p_o_min_bar: float = 0.1
+    p_o_max_bar: float = 0.5
+    p_ed_min_bar: float = 0.1
+    p_ed_max_bar: float = 0.5
+    p_a_min_bar: float = 0.1
+    p_a_max_bar: float = 0.5
+    p_i_min_bar: float = 0
+    p_i_max_bar: float = 0
+    p_b_min_bar: float = 0.1
+    p_b_max_bar: float = 0.5
+    p_f_min_bar: float = 0
+    p_f_max_bar: float = 0
+    p_vacCO2_min_bar: float = 0.4
+    p_vacCO2_max_bar: float = 0.8
+
+@define
+class Pump:
+    """
+    A class to represent a pump with specific flow rate and pressure characteristics.
+
+    Attributes:
+        Q_min (float): Minimum flow rate (m³/s).
+        Q_max (float): Maximum flow rate (m³/s).
+        p_min_bar (float): Minimum pressure (bar).
+        p_max_bar (float): Maximum pressure (bar).
+        eff (float): Efficiency of the pump.
+        Q (float): Instantaneous flow rate (m³/s), initially set to zero.
+    """
+
+    Q_min: float
+    Q_max: float
+    p_min_bar: float
+    p_max_bar: float
+    eff: float
+    Q: float = field(default=0)
+
+    def pumpPower(self, Q):
+        """
+        Calculate the power required for the pump based on the flow rate.
+
+        Args:
+            Q (float): Flow rate (m³/s).
+
+        Returns:
+            float: Power required for the pump (W).
+
+        Raises:
+            ValueError: If the flow rate is out of the specified range or if the minimum pressure is greater than the maximum pressure.
+        """
+        if Q == 0:
+            P_pump = 0
+        elif Q < self.Q_min:
+            warnings.warn(
+                f"{self.__class__.__name__}: Flow Rate is {(self.Q_min - Q) / self.Q_min * 100:.2f}% less than the range provided for pump power. Defaulting to minimum flow rate: {self.Q_min:.2f} (m³/s).",
+                UserWarning,
+            )
+            Q = self.Q_min
+            perc_range = (Q - self.Q_min) / (self.Q_max - self.Q_min)
+            p_bar = (self.p_max_bar - self.p_min_bar) * perc_range + self.p_min_bar
+            p = p_bar * 100000  # convert from bar to Pa
+            P_pump = Q * p / self.eff
+        elif Q > self.Q_max:
+            warnings.warn(
+                f"Flow Rate is {(Q - self.Q_max) / self.Q_max * 100:.2f}% larger than the range provided for pump power. Defaulting to maximum flow rate: {self.Q_max:.2f} (m³/s).",
+                UserWarning,
+            )
+            Q = self.Q_max
+            perc_range = (Q - self.Q_min) / (self.Q_max - self.Q_min)
+            p_bar = (self.p_max_bar - self.p_min_bar) * perc_range + self.p_min_bar
+            p = p_bar * 100000  # convert from bar to Pa
+            P_pump = Q * p / self.eff
+        elif self.p_min_bar > self.p_max_bar:
+            raise ValueError(
+                "Minimum Pressure Must Be Less Than or Equal to Maximum Pressure for Pump"
+            )
+        elif self.Q_min == self.Q_max:
+            p_bar = self.p_max_bar  # max pressure used if the flow rate is constant
+            p = p_bar * 100000  # convert from bar to Pa
+            P_pump = Q * p / self.eff
+        else:
+            perc_range = (Q - self.Q_min) / (self.Q_max - self.Q_min)
+            p_bar = (self.p_max_bar - self.p_min_bar) * perc_range + self.p_min_bar
+            p = p_bar * 100000  # convert from bar to Pa
+            P_pump = Q * p / self.eff
+        return P_pump
+
+    @property
+    def P_min(self):
+        """
+        Calculate the minimum power required for the pump.
+
+        Returns:
+            float: Minimum power required for the pump (W).
+        """
+        return self.pumpPower(self.Q_min)
+
+    @property
+    def P_max(self):
+        """
+        Calculate the maximum power required for the pump.
+
+        Returns:
+            float: Maximum power required for the pump (W).
+        """
+        return self.pumpPower(self.Q_max)
+
+    def power(self):
+        """
+        Calculate the power required for the pump based on the current flow rate.
+
+        Returns:
+            float: Power required for the pump (W).
+        """
+        return self.pumpPower(self.Q)
+
+@define
+class PumpOutputs:
+    """
+    A class to represent the outputs of initialized pumps.
+
+    Attributes:
+        pumpO (Pump): Seawater intake pump.
+        pumpED (Pump): ED pump.
+        pumpA (Pump): Acid pump.
+        pumpI (Pump): Pump for seawater acidification.
+        pumpB (Pump): Base pump.
+        pumpF (Pump): Seawater output pump.
+        pumpED4 (Pump): ED pump for S4.
+    """
+
+    pumpO: Pump
+    pumpED: Pump
+    pumpA: Pump
+    pumpI: Pump
+    pumpB: Pump
+    pumpF: Pump
+    pumpED4: Pump
+
+def initialize_pumps(
+    oea_config: OAEInputs, pump_config: PumpInputs
+) -> PumpOutputs:
+    """Initialize a list of Pump instances based on the provided configurations.
+
+    Args:
+        oea_config (OEAInputs): The ocean alkalinity enhancement inputs.
+        pump_config (PumpInputs): The pump inputs.
+
+    Returns:
+        PumpOutputs: An instance of PumpOutputs containing all initialized pumps.
+    """
+    Q_ed1 = oea_config.Q_ed1
+    N_edMin = oea_config.N_edMin
+    N_edMax = oea_config.N_edMax
+    p = pump_config
+    pumpO = Pump(
+        Q_ed1 * N_edMin * (1 / oea_config.frac_EDflow - 1),
+        Q_ed1 * N_edMax * 1 / oea_config.frac_EDflow,
+        p.p_o_min_bar,
+        p.p_o_max_bar,
+        p.y_pump,
+    )  # features of seawater intake pump
+    pumpED = Pump(
+        Q_ed1 * N_edMin, 
+        Q_ed1 * N_edMax, 
+        p.p_ed_min_bar, 
+        p.p_ed_max_bar, 
+        p.y_pump
+    )  # features of ED pump
+    pumpA = Pump(
+        pumpED.Q_min * oea_config.frac_acidFlow, 
+        pumpED.Q_max * oea_config.frac_baseFlow,
+        p.p_a_min_bar, 
+        p.p_a_max_bar, 
+        p.y_pump
+    )  # features of acid pump
+    pumpI = Pump(
+        pumpED.Q_min * (1/oea_config.frac_EDflow - 1), 
+        pumpED.Q_max * (1/oea_config.frac_EDflow - 1), 
+        p.p_i_min_bar, 
+        p.p_i_max_bar, 
+        p.y_pump
+    )  # features of pump for seawater acidification
+    pumpB = Pump(
+        pumpED.Q_min - pumpA.Q_min,
+        pumpED.Q_max - pumpA.Q_max,
+        p.p_b_min_bar,
+        p.p_b_max_bar,
+        p.y_pump,
+    )  # features of base pump
+    pumpF = Pump(
+        pumpI.Q_min + pumpB.Q_min,
+        pumpI.Q_max + pumpB.Q_max,
+        p.p_f_min_bar,
+        p.p_f_max_bar,
+        p.y_pump,
+    )  # features of seawater output pump (note min can be less if all acid and base are used)
+    pumpED4 = Pump(
+        Q_ed1 * N_edMin, 
+        Q_ed1 * N_edMax, 
+        p.p_o_min_bar, 
+        p.p_o_max_bar, 
+        p.y_pump
+    )  # features of ED pump for S4 (pressure of intake is used here)
+    return PumpOutputs(
+        pumpO=pumpO,
+        pumpED=pumpED,
+        pumpA=pumpA,
+        pumpI=pumpI,
+        pumpB=pumpB,
+        pumpF=pumpF,
+        pumpED4=pumpED4,
+    )
 
 if __name__ == "__main__":
     test = OAEInputs()
