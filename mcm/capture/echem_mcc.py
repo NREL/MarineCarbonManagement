@@ -1888,7 +1888,7 @@ class ElectrodialysisCostInputs:
     Attributes:
         electrodialysis_inputs (ElectrodialysisInputs): Inputs related to the electrodialysis process.
         mCC_yr (float): Average yearly CO2 capture (tCO2/yr).
-        max_theoretical_mCC (float): Maximum theoretical CO2 capture (tCO2/yr).
+        max_theoretical_mCC (float): Maximum theoretical CO2 capture (tCO2/h).
         total_tank_volume (float): Total volume of acid/base tanks.
         infrastructure_type (str): Infrastructure type, with options "desal", "swCool", or "new". Defaults to "new".
         user_costs (bool): If True, user-defined cost inputs are used, and the costs are initialized to zero.
