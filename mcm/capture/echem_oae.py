@@ -11,7 +11,6 @@ import numpy as np
 import pandas as pd
 import PyCO2SYS as pyco2
 import matplotlib.pyplot as plt
-import statistics as stat
 
 from attrs import define, field
 from typing import Tuple
@@ -965,6 +964,492 @@ def initialize_power_chemical_ranges(
         pumps=p,
     )
 
+@define
+class OAEOutputs:
+    """Outputs from the ocean alkalinity enhancement (OAE) process.
+
+    Attributes:
+        OAE_outputs (dict): Dictionary containing various output arrays from the OAE process.
+            Keys include:
+                - N_ed (array): Number of OAE units in operation at each time step.
+                - P_xs (array): Excess power available at each time step (W).
+                - volAcid (array): Volume of excess acid at each time step (m³).
+                - volBase (array): Volume of base added or removed from tanks at each time step (m³).
+                - tank_vol_b (array): Volume of base in the tank at each time step (m³).
+                - mol_OH (array): Moles of OH added to seawater at each time step (mol).
+                - mol_HCl (array): Moles of excess acid generated at each time step (mol).
+                - pH_f (array): Final pH at each time step.
+                - dic_f (array): Final dissolved inorganic carbon concentration at each time step.
+                - ta_f (array): Final total alkalinity at each time step (mol/L).
+                - sal_f (array): Final salinity at each time step (ppt).
+                - c_a (array): Acid concentration at each time step (mol/L).
+                - c_b (array): Base concentration at each time step (mol/L).
+                - Qin (array): Intake flow rate at each time step (m³/s).
+                - Qout (array): Outtake flow rate at each time step (m³/s).
+                - S_t (array): Scenario number active at each time step (1-5).
+                - alkaline_solid_added (array): Amount of alkaline solid added at each time step (g).
+                - alkaline_to_acid (array): Ratio of alkaline solid to acid at each time step.
+        max_tank_fill_percent (float): Maximum percentage of the tank that was filled with acid during simulation.
+        max_tank_fill_m3 (float): Maximum volume of the tank that was filled with acid during simulation (m³).
+        overall_capacity_factor (float): Overall capcity factor (times system is on).
+        oae_capacity_factor (float): Capacity factor of OAE. Total OAE compared to maximum possible OAE.
+        energy_capacity_factor (float): Capacity factor of energy.
+    """
+
+    OAE_outputs: dict
+    max_tank_fill_percent: float
+    max_tank_fill_m3: float
+    overall_capacity_factor: float
+    oae_capacity_factor: float
+    energy_capacity_factor: float
+
+def simulate_alkalinity_enhancement(
+    ranges: OAERangeOutputs,
+    oae_config: OAEInputs,
+    seawater_config: SeaWaterInputs,
+    power_profile,
+    initial_tank_volume_m3,
+):
+    """
+    Simulates the operation of an ocean alkalinity enhancement (OAE) system over time, given power availability and initial tank volumes.
+    The simulation considers various scenarios based on the power profile and tank volumes, updating the state of the system
+    at each time step.
+
+    Parameters:
+        ranges (OAERangeOutputs): The power and chemical ranges for different scenarios of OAE operation.
+        oae_config (OAEInputs): Configuration inputs for the OAE system.
+        seawater_config (SeaWaterInputs): Configuration inputs for the seawater properties.
+        power_profile (np.ndarray): Array representing the available power at each time step (W).
+        initial_tank_volume_m3 (float): The initial volume of acid and base in the tanks (m³).
+
+    Returns:
+        OAEOutputs: A data class containing the simulation results, including the total CO2 captured,
+        capacity factor, and yearly CO2 capture under actual and maximum power conditions.
+
+    Notes:
+        - The function evaluates five scenarios based on the available power and tank volumes, prioritizing CO2 capture and
+          tank filling in the most effective way possible.
+        - Scenario 5 is considered when all input power is excess, meaning no ED units are used.
+    """
+    N_edMin = oae_config.N_edMin
+
+    tank_vol_b = np.zeros(len(power_profile) + 1)
+    tank_vol_b[0] = round(initial_tank_volume_m3,2)
+
+    # Define the array names
+    keys = [
+        "N_ed",  # Number of ED units active
+        "P_xs",  # (W) Excess power at each time
+        "volAcid",  # (m³) Volume of acid added/removed to/from tanks at each time
+        "volBase",  # (m³) Volume of base added/removed to/from tanks at each time
+        "tank_vol_b",  # (m³) Volume of base in the tank at each time
+        "mol_OH",  # (mol) Moles of OH added to seawater at each time
+        "mol_HCl",  # (mol) Moles of excess acid generated at each time
+        "pH_f",  # Final pH at each time
+        "dic_f",  # (mol/L) Final DIC at each time
+        "ta_f",  # (mol/L) Final total alkalinity at each time
+        "sal_f",  # (ppt) Final salinity at each time
+        "c_a",  # (mol/L) Acid concentration at each time step
+        "c_b",  # (mol/L) Base concentration at each time step
+        "Qin",  # (m³/s) Intake flow rate at each time step
+        "Qout",  # (m³/s) Outtake flow rate at each time step
+        "alkaline_solid_added",  # (g) Amount of alkaline solid added at each time step
+        "alkaline_to_acid",  # Ratio of alkaline solid to acid at each time step
+        "S_t",  # The scenario activated at each time step
+    ]
+
+    # Initialize the dictionaries
+    OAE_outputs = {key: np.zeros(len(power_profile)) for key in keys}
+
+    nON = 0  # Timesteps when capture occurs (S1-3) used to determine capacity factor
+
+    for i in range(len(power_profile)):
+        # Scenario 1:  Tanks Full and ED unit Active
+        if power_profile[i] >= ranges.P_minS1_tot and tank_vol_b[i] == ranges.V_bT_max:
+            # Find number of active units based on power
+            for j in range(ranges.N_range):
+                if power_profile[i] >= ranges.S1["pwrRanges"][j]:
+                    i_ed = j  # determine how many ED units can be used
+            OAE_outputs["N_ed"][i] = N_edMin + i_ed  # number of ED units active
+
+            # Update recorded values based on number of ED units active
+            OAE_outputs["volAcid"][i] = ranges.S1["volAcid"][i_ed]
+            OAE_outputs["volBase"][i] = ranges.S1["volBase"][i_ed]
+            OAE_outputs["mol_OH"][i] = ranges.S1["mol_OH"][i_ed]
+            OAE_outputs["mol_HCl"][i] = ranges.S1["mol_HCl"][i_ed]
+            OAE_outputs["pH_f"][i] = ranges.S1["pH_f"][i_ed]
+            OAE_outputs["dic_f"][i] = ranges.S1["dic_f"][i_ed]
+            OAE_outputs["ta_f"][i] = ranges.S1["ta_f"][i_ed]
+            OAE_outputs["sal_f"][i] = ranges.S1["sal_f"][i_ed]
+            OAE_outputs["c_a"][i] = ranges.S1["c_a"][i_ed]
+            OAE_outputs["c_b"][i] = ranges.S1["c_b"][i_ed]
+            OAE_outputs["Qin"][i] = ranges.S1["Qin"][i_ed]
+            OAE_outputs["Qout"][i] = ranges.S1["Qout"][i_ed]
+            OAE_outputs["alkaline_solid_added"][i] = ranges.S1["alkaline_solid_added"][i_ed]
+            OAE_outputs["alkaline_to_acid"][i] = ranges.S1["alkaline_to_acid"][i_ed]
+            OAE_outputs["S_t"][i] = 1
+
+            # Update Tank Volumes
+            tank_vol_b[i + 1] = round(tank_vol_b[i] + OAE_outputs["volBase"][i],2)
+            OAE_outputs["tank_vol_b"][i] = tank_vol_b[i + 1]
+
+            # Ensure Tank Volume Can't be More Than Max
+            if tank_vol_b[i + 1] > ranges.V_bT_max:
+                tank_vol_b[i + 1] = round(ranges.V_bT_max,2)
+
+            # Excess Power
+            P_oae = ranges.S1["pwrRanges"][
+                i_ed
+            ]  # power needed for mCC given the available power
+            OAE_outputs["P_xs"][i] = (
+                power_profile[i] - P_oae
+            )  # Remaining power available for batteries
+
+            # Number of times system is on
+            nON = nON + 1  # Used to determine Capacity Factor
+
+        # Scenario 2: Capture CO2 and Fill Tanks
+        elif (
+            oae_config.use_storage_tanks
+            and power_profile[i] >= ranges.P_minS2_tot
+            and tank_vol_b[i] < ranges.V_bT_max
+        ):
+            # Find number of units that can be active based on power and volume
+            # Determine number of scenarios that meet the qualifications
+            v = 0
+            for j in range(ranges.S2_tot_range):
+                if (
+                    power_profile[i] >= ranges.S2["pwrRanges"][j]
+                    and ranges.V_bT_max >= tank_vol_b[i] + ranges.S2["volBase"][j]
+                ):
+                    v = v + 1  # determine size of matrix for qualifying scenarios
+            S2_viableRanges = np.zeros((v, 2))
+            i_v = 0
+            for j in range(ranges.S2_tot_range):
+                if (
+                    power_profile[i] >= ranges.S2["pwrRanges"][j]
+                    and ranges.V_bT_max >= tank_vol_b[i] + ranges.S2["volBase"][j]
+                ):
+                    S2_viableRanges[i_v, 0] = j  # index in the scenarios
+                    S2_viableRanges[i_v, 1] = ranges.S2["volBase"][
+                        j
+                    ]  # adding volume to the tanks is prioritized
+                    i_v = i_v + 1
+            # Select the viable scenario that fills the tank the most
+            for j in range(len(S2_viableRanges[:, 1])):
+                if S2_viableRanges[j, 1] == max(S2_viableRanges[:, 1]):
+                    i_s2 = int(S2_viableRanges[j, 0])
+
+            # Number of ED Units Active
+            OAE_outputs["N_ed"][i] = (
+                ranges.S2_ranges[i_s2, 0] + ranges.S2_ranges[i_s2, 1]
+            )  # number of ED units active
+
+            # Update recorded values based on the case within S2
+            OAE_outputs["volAcid"][i] = ranges.S2["volAcid"][i_s2]
+            OAE_outputs["volBase"][i] = ranges.S2["volBase"][i_s2]
+            OAE_outputs["mol_OH"][i] = ranges.S2["mol_OH"][i_s2]
+            OAE_outputs["mol_HCl"][i] = ranges.S2["mol_HCl"][i_s2]
+            OAE_outputs["pH_f"][i] = ranges.S2["pH_f"][i_s2]
+            OAE_outputs["dic_f"][i] = ranges.S2["dic_f"][i_s2]
+            OAE_outputs["ta_f"][i] = ranges.S2["ta_f"][i_s2]
+            OAE_outputs["sal_f"][i] = ranges.S2["sal_f"][i_s2]
+            OAE_outputs["c_a"][i] = ranges.S2["c_a"][i_s2]
+            OAE_outputs["c_b"][i] = ranges.S2["c_b"][i_s2]
+            OAE_outputs["Qin"][i] = ranges.S2["Qin"][i_s2]
+            OAE_outputs["Qout"][i] = ranges.S2["Qout"][i_s2]
+            OAE_outputs["alkaline_solid_added"][i] = ranges.S2["alkaline_solid_added"][i_s2]
+            OAE_outputs["alkaline_to_acid"][i] = ranges.S2["alkaline_to_acid"][i_s2]
+            OAE_outputs["S_t"][i] = 2
+
+            # Update Tank Volume
+            tank_vol_b[i + 1] = round(tank_vol_b[i] + OAE_outputs["volAcid"][i],2)
+            OAE_outputs["tank_vol_b"][i] = tank_vol_b[i + 1]
+
+            # Ensure Tank Volume Can't be More Than Max
+            if tank_vol_b[i + 1] > ranges.V_bT_max:
+                tank_vol_b[i + 1] = round(ranges.V_bT_max,2)
+
+            # Find excess power
+            P_oae = ranges.S2["pwrRanges"][
+                i_s2
+            ]  # power needed for OAE given the available power
+            OAE_outputs["P_xs"][i] = (
+                power_profile[i] - P_oae
+            )  # Remaining power available for batteries
+
+            # Number of times system is on
+            nON = nON + 1  # Used to determine Capacity Factor
+
+        # Scenario 3: Tanks Used for CO2 Capture
+        elif (
+            oae_config.use_storage_tanks
+            and power_profile[i] >= ranges.P_minS3_tot
+            and tank_vol_b[i] >= ranges.V_b3_min
+        ):
+            # Find number of equivalent units active based on power
+            for j in range(ranges.N_range):
+                if (
+                    power_profile[i] >= ranges.S3["pwrRanges"][j]
+                    and -tank_vol_b[i] <= ranges.S3["volBase"][j]
+                ):
+                    i_ed = j  # determine how many ED units can be used
+                elif ranges.V_bT_max == 0:
+                    i_ed = 0
+            OAE_outputs["N_ed"][i] = N_edMin + i_ed  # number of ED units active
+
+            # Update recorded values based on number of ED units active
+            OAE_outputs["volBase"][i] = ranges.S3["volBase"][i_ed]
+            OAE_outputs["mol_OH"][i] = ranges.S3["mol_OH"][i_ed]
+            OAE_outputs["mol_HCl"][i] = ranges.S3["mol_HCl"][i_ed]
+            OAE_outputs["pH_f"][i] = ranges.S3["pH_f"][i_ed]
+            OAE_outputs["dic_f"][i] = ranges.S3["dic_f"][i_ed]
+            OAE_outputs["ta_f"][i] = ranges.S3["ta_f"][i_ed]
+            OAE_outputs["sal_f"][i] = ranges.S3["sal_f"][i_ed]
+            OAE_outputs["c_a"][i] = ranges.S3["c_a"][i_ed]
+            OAE_outputs["c_b"][i] = ranges.S3["c_b"][i_ed]
+            OAE_outputs["Qin"][i] = ranges.S3["Qin"][i_ed]
+            OAE_outputs["Qout"][i] = ranges.S3["Qout"][i_ed]
+            OAE_outputs["alkaline_solid_added"][i] = ranges.S3["alkaline_solid_added"][i_ed]
+            OAE_outputs["alkaline_to_acid"][i] = ranges.S3["alkaline_to_acid"][i_ed]
+            OAE_outputs["S_t"][i] = 3
+
+            # Update Tank Volume
+            tank_vol_b[i + 1] = round(tank_vol_b[i] + OAE_outputs["volBase"][i],2)
+            OAE_outputs["tank_vol_b"][i] = tank_vol_b[i + 1]
+
+            # Ensure Tank Volume Can't be More Than Max
+            if tank_vol_b[i + 1] > ranges.V_bT_max:
+                tank_vol_b[i + 1] = round(ranges.V_bT_max,2)
+
+            # Find excess power
+            P_oae = ranges.S3["pwrRanges"][i_ed]  # Power needed for oae
+            OAE_outputs["P_xs"][i] = (
+                power_profile[i] - P_oae
+            )  # Excess Power to Batteries
+
+            # Number of times system is on
+            nON = nON + 1  # Used to determine Capacity Factor
+
+        # Scenario 4: No Capture, Tanks Filled by ED Units
+        elif (
+            oae_config.use_storage_tanks
+            and power_profile[i] >= ranges.P_minS4_tot
+            and tank_vol_b[i] < ranges.V_b3_min
+        ):
+            # Determine number of ED units active
+            for j in range(ranges.N_range):
+                if (
+                    power_profile[i] >= ranges.S4["pwrRanges"][j]
+                    and ranges.V_bT_max >= tank_vol_b[i] + ranges.S4["volBase"][j]
+                ):
+                    i_ed = j  # determine how many ED units can be used
+                elif ranges.V_bT_max == 0:
+                    i_ed = 0
+            OAE_outputs["N_ed"][i] = N_edMin + i_ed  # number of ED units active
+
+            # Update recorded values based on number of ED units active
+            OAE_outputs["volAcid"][i] = ranges.S4["volAcid"][i_ed]
+            OAE_outputs["volBase"][i] = ranges.S4["volBase"][i_ed]
+            OAE_outputs["mol_OH"][i] = ranges.S4["mol_OH"][i_ed]
+            OAE_outputs["mol_HCl"][i] = ranges.S4["mol_HCl"][i_ed]
+            OAE_outputs["pH_f"][i] = ranges.S4["pH_f"][i_ed]
+            OAE_outputs["dic_f"][i] = ranges.S4["dic_f"][i_ed]
+            OAE_outputs["ta_f"][i] = ranges.S4["ta_f"][i_ed]
+            OAE_outputs["sal_f"][i] = ranges.S4["sal_f"][i_ed]
+            OAE_outputs["c_a"][i] = ranges.S4["c_a"][i_ed]
+            OAE_outputs["c_b"][i] = ranges.S4["c_b"][i_ed]
+            OAE_outputs["Qin"][i] = ranges.S4["Qin"][i_ed]
+            OAE_outputs["Qout"][i] = ranges.S4["Qout"][i_ed]
+            OAE_outputs["alkaline_solid_added"][i] = ranges.S4["alkaline_solid_added"][i_ed]
+            OAE_outputs["alkaline_to_acid"][i] = ranges.S4["alkaline_to_acid"][i_ed]
+            OAE_outputs["S_t"][i] = 4
+
+            # Update Tank Volume
+            tank_vol_b[i + 1] = round(tank_vol_b[i] + OAE_outputs["volBase"][i],2)
+            OAE_outputs["tank_vol_b"][i] = tank_vol_b[i + 1]
+
+            # Ensure Tank Volume Can't be More Than Max
+            if tank_vol_b[i + 1] > ranges.V_bT_max:
+                tank_vol_b[i + 1] = round(ranges.V_bT_max,2)
+
+            # Find excess power
+            P_oae = ranges.S4["pwrRanges"][
+                i_ed
+            ]  # power needed for oae system given the available power
+            OAE_outputs["P_xs"][i] = (
+                power_profile[i] - P_oae
+            )  # Remaining power available for batteries
+
+            # No change to nON since no capture is done
+
+        # Scenario 5: When all Input Power is Excess
+        else:
+            # Determine number of ED units active
+            OAE_outputs["N_ed"][i] = 0  # None are used in this case
+
+            # Update recorded values based on number of ED units active
+            OAE_outputs["volAcid"][i] = ranges.S5["volAcid"]
+            OAE_outputs["volBase"][i] = ranges.S5["volBase"]
+            OAE_outputs["mol_OH"][i] = ranges.S5["mol_OH"]
+            OAE_outputs["mol_HCl"][i] = ranges.S5["mol_HCl"]
+            OAE_outputs["pH_f"][i] = ranges.S5["pH_f"]
+            OAE_outputs["dic_f"][i] = ranges.S5["dic_f"]
+            OAE_outputs["ta_f"][i] = ranges.S5["ta_f"]
+            OAE_outputs["sal_f"][i] = ranges.S5["sal_f"]
+            OAE_outputs["c_a"][i] = ranges.S5["c_a"]
+            OAE_outputs["c_b"][i] = ranges.S5["c_b"]
+            OAE_outputs["Qin"][i] = ranges.S5["Qin"]
+            OAE_outputs["Qout"][i] = ranges.S5["Qout"]
+            OAE_outputs["alkaline_solid_added"][i] = ranges.S5["alkaline_solid_added"]
+            OAE_outputs["alkaline_to_acid"][i] = ranges.S5["alkaline_to_acid"]
+            OAE_outputs["S_t"][i] = 5
+
+            # Update Tank Volume
+            tank_vol_b[i + 1] = round(tank_vol_b[i] + OAE_outputs["volBase"][i],2)
+            OAE_outputs["tank_vol_b"][i] = tank_vol_b[i + 1]
+
+            # Ensure Tank Volume Can't be More Than Max
+            if tank_vol_b[i + 1] > ranges.V_bT_max:
+                tank_vol_b[i + 1] = round(ranges.V_bT_max,2)
+
+            # Find excess power
+            OAE_outputs["P_xs"][i] = power_profile[
+                i
+            ]  # Otherwise the input power goes directly to the batteries
+
+            # No change to nON since no capture is done
+
+    # Overall tank fill
+    maxTankFill_m3 = max(tank_vol_b)
+
+    if ranges.V_bT_max == 0:
+        maxTankFillP = 0
+    else:
+        maxTankFillP = (
+            max(tank_vol_b) / ranges.V_bT_max * 100
+        )  # max tank fill in percent
+
+    # Totals
+    # Total moles of alkalinity added
+    mol_OH_total = sum(OAE_outputs["mol_OH"])  
+
+    # Total moles of excess acid generated
+    mol_HCl_total = sum(OAE_outputs["mol_HCl"])
+
+    # Range of Base Addition Rates (mol)
+    OH_min_addition_mol = min(ranges.S1["mol_OH"])
+    OH_max_addition_mol = max(ranges.S1["mol_OH"])
+
+    # Average yearly alkalinity addition
+    mol_OH_yr = round(mol_OH_total, 2) # mol/yr
+
+    # Approximation for CDR Scale
+    N_co2est = 0.8 * mol_OH_yr # (mol CO2/yr) Estimated moles of CO2 absorbed
+    M_co2est = N_co2est * 44 /1000000 # (tCO2/yr) Estimated mass of CO2 absorbed
+
+    # Approximation for CDR capacity
+    # Yearly alkalinity addition under constant max power conditions
+    mol_OH_yr_MaxPwr = OH_max_addition_mol * 8760  # mol/yr
+    N_co2cap = 0.8 * mol_OH_yr_MaxPwr # (mol CO2/yr) Estimated moles of CO2 absorbed
+    M_co2cap = N_co2cap * 44 /1000000 # (tCO2/yr) Estimated mass of CO2 absorbed
+
+    # Average pH, DIC, and sal of effluent when OAE is done
+    i_oae = 0
+    pH_oae = np.zeros(nON)
+    dic_oae = np.zeros(nON)
+    sal_oae = np.zeros(nON)
+    ta_oae = np.zeros(nON)
+    for i in range(len(OAE_outputs["pH_f"])):
+        if OAE_outputs["pH_f"][i] != seawater_config.pH_i:
+            pH_oae[i_oae] = OAE_outputs["pH_f"][i]
+            dic_oae[i_oae] = OAE_outputs["dic_f"][i]
+            sal_oae[i_oae] = OAE_outputs["sal_f"][i]
+            ta_oae[i_oae] = OAE_outputs["ta_f"][i]
+            i_oae = i_oae+1
+    pH_avg = round(sum(pH_oae) / len(pH_oae), 2) # (unitless) Average pH
+    dic_avg = round(sum(dic_oae) / len(dic_oae), 2) # (M) Average DIC
+    sal_avg = round(sum(sal_oae) / len(sal_oae), 2) # (ppt) Average salinity
+    ta_avg = round(sum(ta_oae) / len(ta_oae), 2) # (M) Average total alkalinity
+
+    # pH of excess acid
+    pH_HCl_excess = round(-math.log10(ranges.S1["c_a"][0]),2)
+
+    # Average yearly acid production
+    mol_HCl_yr = sum(OAE_outputs["mol_HCl"][0:8760])
+
+    # Average volume of acid to dispose of
+    volXSacid_yr = sum(OAE_outputs["volAcid"][0:8760])
+
+    # Average mass of alkaline solids needed for neutralization
+    m_adSolid_yr = sum(OAE_outputs["alkaline_solid_added"][0:8760])
+
+    # Average mass of sold products and value per ton
+    if oae_config.acid_disposal_method == "sell acid":
+        M_rev_yr = round(volXSacid_yr * R_H2O/10**3,2) # mass of sold acid in tons/yr 
+        X_rev = 9 # $/ton for dilute acid
+
+    else:
+        # Assume acid is sold
+        M_rev_yr = round(volXSacid_yr * R_H2O/10**3,2) # mass of sold acid in tons/yr 
+        X_rev = 9 # $/ton for dilute acid
+
+    # Average volume of alkaline seawater added to ocean
+    volOAEbase_yr = sum(OAE_outputs["Qout"][0:8760]*3600) # (m3/yr) Volume of alkaline seawater added to ocean
+
+    # Overall capacity factor (times system is on)
+    OAE_timeFrac = nON/len(OAE_outputs["N_ed"])
+
+    # OAE capacity factor (compare OAE with max if max power always available)
+    OAEcapFact = mol_OH_yr/mol_OH_yr_MaxPwr
+
+    # Print and determine the energy capacity factor (compare energy availability with max if max power always available)
+    EcapFact = sum(exPwr[0:8760]) / (max(exPwr)*8760) 
+
+    # Results for biogeochemistry (daily results)
+    iDays = np.zeros(365)
+    VswOut = np.zeros(365)
+    QswOut = np.zeros(365)
+    pHavgOut = np.zeros(365) # needs to only consider hours when q_out > 0
+    dicOut = np.zeros(365) 
+    salOut = np.zeros(365)
+    taOut = np.zeros(365)
+    for i in range(365):
+        iDays[i] = i+1
+        VswOut[i] = 3600*sum(OAE_outputs["Qout"][24*i:24*(i+1)-1])
+        QswOut[i] = VswOut[i]/(24*60*60) # average output flowrate in m3/s
+        pHon = 0
+        pHsum = 0
+        dicSum = 0
+        salSum = 0
+        taSum = 0
+        for j in range(24*i, 24*(i+1)):
+            if OAE_outputs["Qout"][j] > 0:
+                pHon = pHon+1
+                pHsum = pHsum + OAE_outputs["pH_f"][j]
+                dicSum = dicSum + OAE_outputs["dic_f"][j]
+                salSum = salSum + OAE_outputs["sal_f"][j]
+                taSum = taSum + OAE_outputs["ta_f"][j]
+        if pHon > 0:
+            pHavgOut[i] = round(pHsum/pHon,2) # average effluent pH when plant is active at least once in a day
+            dicOut[i] = dicSum/pHon # average DIC when plant can be active at least once in a day
+            salOut[i] = round(salSum/pHon,2)
+            taOut[i] = taSum/pHon # average TA when plant can be active at least once in a day
+        else:
+            pHavgOut[i] = seawater_config.pH_i
+            dicOut[i] = seawater_config.dic_i
+            salOut[i] = seawater_config.sal
+            taOut[i] = seawater_config.ta_i
+
+    return OAEOutputs(
+        OAE_outputs=OAE_outputs,
+        max_tank_fill_percent=maxTankFillP,
+        max_tank_fill_m3=maxTankFill_m3,
+        overall_capacity_factor=OAE_timeFrac,
+        oae_capacity_factor=OAEcapFact,
+        energy_capacity_factor=EcapFact,
+    )
+
 if __name__ == "__main__":
     test = OAEInputs()
 
@@ -972,4 +1457,28 @@ if __name__ == "__main__":
         oae_config=OAEInputs(),
         pump_config=PumpInputs(),
         seawater_config=SeaWaterInputs()
+    )
+
+    # EXAMPLE: Sin function for power input
+    days = 365
+    exTime = np.zeros(24 * days)  # Example time in hours
+    for i in range(len(exTime)):
+        exTime[i] = i + 1
+    maxPwr = 400 * 10**4 # W
+    Amp = maxPwr/2
+    periodT = 24 
+    movUp = Amp
+    movSide = -1*math.pi/2
+    exPwr = np.zeros(len(exTime))
+    for i in range(len(exTime)):
+        exPwr[i] = Amp*math.sin(2*math.pi/periodT*exTime[i] + movSide) + movUp
+        if int(exTime[i]/24) % 5 == 1:
+            exPwr[i] = exPwr[i] * 0.1
+
+    results = simulate_alkalinity_enhancement(
+        ranges=res1,
+        oae_config=OAEInputs(),
+        seawater_config=SeaWaterInputs(),
+        power_profile=exPwr,
+        initial_tank_volume_m3=0,
     )
