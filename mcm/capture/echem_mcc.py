@@ -2180,7 +2180,7 @@ def run_electrodialysis_physics_model(
         # Design Inputs
         design_inputs = {
             "Power Need for 1 ED Unit (W)": electrodialysis_config.P_ed1,
-            "Flow Rate for 1 ED Unit (m/s)": electrodialysis_config.Q_ed1,
+            "Flow Rate for 1 ED Unit (m3/s)": electrodialysis_config.Q_ed1,
             "Minimum Number of ED Units Used": electrodialysis_config.N_edMin,
             "Maximum Number of ED Units Used": electrodialysis_config.N_edMax,
             "Acid Production Efficiency (kWh/mol HCl)": electrodialysis_config.E_HCl,
