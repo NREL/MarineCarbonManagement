@@ -190,7 +190,7 @@ class PumpInputs:
         p_b_max_bar (float): The maximum pressure (in bar) for pumping base. Default is 0.5.
         p_f_min_bar (float): The minimum pressure (in bar) for released seawater. Default is 0.
         p_f_max_bar (float): The maximum pressure (in bar) for released seawater. Default is 0.
-        """
+    """
 
     y_pump: float = 0.9
     p_o_min_bar: float = 0.1
@@ -217,6 +217,7 @@ class Pump:
         p_min_bar (float): Minimum pressure (bar).
         p_max_bar (float): Maximum pressure (bar).
         eff (float): Efficiency of the pump.
+        name (str): Name of the pump, used for identification in warnings.
         Q (float): Instantaneous flow rate (m³/s), initially set to zero.
     """
 
@@ -306,6 +307,7 @@ class Pump:
             float: Power required for the pump (W).
         """
         return self.pumpPower(self.Q)
+
 
 @define
 class PumpOutputs:
@@ -856,7 +858,7 @@ def initialize_power_chemical_ranges(
         S2["volBase"][i] = round(Q_bT * 3600,2)  # (m3) base added to tank
 
         # Base addition to seawater
-        p.pumpI.Q = (1 / oae_config.frac_EDflow - 1) * (Q_bOAE / oae_config.frac_baseFlow)
+        p.pumpI.Q = (1 / oae_config.frac_EDflow - 1) *  Q_bOAE / oae_config.frac_baseFlow
 
         # Seawater Intake
         p.pumpO.Q = p.pumpI.Q + p.pumpED.Q   # total seawater intake
@@ -871,8 +873,8 @@ def initialize_power_chemical_ranges(
 
         # Find effluent chem after base addition
         ta_fu = m_to_umol_per_kg(S2["ta_f"][i]) 
-        SAL_f = (SAL_b * p.pumpB.Q + seawater_config.SAL_i * p.pumpI.Q) / (
-            p.pumpB.Q + p.pumpI.Q
+        SAL_f = (SAL_b * Q_bOAE + seawater_config.SAL_i * p.pumpI.Q) / (
+            Q_bOAE + p.pumpI.Q
         )
         S2["sal_f"][i] = sal_m_to_ppt(SAL_f/1000) # (ppt) Salinity after base addition
 
@@ -1200,7 +1202,7 @@ def simulate_ocean_alkalinity_enhancement(
             OAE_outputs["S_t"][i] = 2
 
             # Update Tank Volume
-            tank_vol_b[i + 1] = round(tank_vol_b[i] + OAE_outputs["volAcid"][i],2)
+            tank_vol_b[i + 1] = round(tank_vol_b[i] + OAE_outputs["volBase"][i],2)
             OAE_outputs["tank_vol_b"][i] = tank_vol_b[i + 1]
 
             # Ensure Tank Volume Can't be More Than Max
@@ -1392,23 +1394,15 @@ def simulate_ocean_alkalinity_enhancement(
     M_co2cap = N_co2cap * 44 /1000000 # (tCO2/yr) Estimated mass of CO2 absorbed
 
     # Average pH, DIC, and sal of effluent when OAE is done
-    if np.any(OAE_outputs["pH_f"] != seawater_config.pH_i):
-        pH_avg = round(np.mean(OAE_outputs["pH_f"][OAE_outputs["pH_f"] != seawater_config.pH_i]), 2)
-    else:
-        pH_avg = 0.0
-    if np.any(OAE_outputs["dic_f"] != seawater_config.dic_i):
-        dic_avg = round(np.mean(OAE_outputs["dic_f"][OAE_outputs["dic_f"] != seawater_config.dic_i]), 2)
-    else:
-        dic_avg = 0.0
-    
-    if np.any(OAE_outputs["sal_f"] != seawater_config.sal):
-        sal_avg = round(np.mean(OAE_outputs["sal_f"][OAE_outputs["sal_f"] != seawater_config.sal]), 2)
-    else:
-        sal_avg = 0.0
-    if np.any(OAE_outputs["ta_f"] != seawater_config.ta_i):
-        ta_avg = round(np.mean(OAE_outputs["ta_f"][OAE_outputs["ta_f"] != seawater_config.ta_i]), 2)
-    else:
-        ta_avg = 0.0
+    pH_oae = [p for i, p in enumerate(OAE_outputs["pH_f"]) if p != seawater_config.pH_i]
+    dic_oae = [OAE_outputs["dic_f"][i] for i, p in enumerate(OAE_outputs["pH_f"]) if p != seawater_config.pH_i]
+    sal_oae = [OAE_outputs["sal_f"][i] for i, p in enumerate(OAE_outputs["pH_f"]) if p != seawater_config.pH_i]
+    ta_oae = [OAE_outputs["ta_f"][i] for i, p in enumerate(OAE_outputs["pH_f"]) if p != seawater_config.pH_i]
+
+    pH_avg = round(sum(pH_oae) / len(pH_oae), 2)
+    dic_avg = sum(dic_oae) / len(dic_oae)
+    sal_avg = round(sum(sal_oae) / len(sal_oae))
+    ta_avg = sum(ta_oae) / len(ta_oae)
     
     # pH of excess acid
     pH_HCl_excess = round(-math.log10(ranges.S1["c_a"][0]),2)
