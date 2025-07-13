@@ -551,7 +551,6 @@ class RCALoadingCalculator:
     def run(self):
         """Main execution method for RCA loading calculation."""
         if self.oae.acid_disposal_method != "sell rca":
-            print("No RCA calculation needed for", self.oae.acid_disposal_method)
             return
 
         # Step 1: Acid system before RCA
@@ -562,11 +561,9 @@ class RCALoadingCalculator:
 
         # Step 3: Estimate initial RCA loading (ignoring Ca2+)
         w_rca_init = self.estimate_initial_rca(ta_target, ta_a)
-        print("Initial RCA Estimate (ignoring Ca2+):", w_rca_init, "g/L")
 
         # Step 4: Estimate pH from this guess
         pH_test, _, _, _ = self.simulate_rca_effect(w_rca_init, ta_a, ca_a, sal_a)
-        print("Resulting pH from Initial Guess:", pH_test)
 
         # Step 5: Search for RCA loading that achieves target pH
         w_final, pH_final, ca_final, sal_final, ta_final = self.find_optimal_rca_loading(
@@ -575,7 +572,6 @@ class RCALoadingCalculator:
 
         # Step 6: Refine if not found
         if w_final is None:
-            print("Refining RCA search...")
             w_final, pH_final, ca_final, sal_final, ta_final = self.find_optimal_rca_loading(
                 w_rca_init, ta_a, ca_a, sal_a, step=0.001
             )
@@ -587,16 +583,6 @@ class RCALoadingCalculator:
         self._sal_final = sal_final
         self._ta_final = ta_final
         self._sal_a = sal_a
-
-        # Final result
-        if w_final:
-            print("Final RCA Loading:", w_final, "g/L")
-            print("Final pH:", pH_final)
-            print("Final Ca2+:", ca_final, "M")
-            print("Final Salinity:", sal_final, "M")
-            print("Final TA:", ta_final, "M")
-        else:
-            print("Could not meet pH target within tolerance.")
 
     @property
     def results(self) -> dict:
@@ -1971,6 +1957,7 @@ def simulate_ocean_alkalinity_enhancement(
         M_rev_yr = 0 # mass of sold acid in tons/yr 
         X_rev = 9 # $/ton for dilute acid
         M_disposed_yr = volXSacid_yr * R_H2O/10**3 # mass of sold/disposed acid in tons/yr
+        slurry_mass_max = 0
 
     # Average volume of alkaline seawater added to ocean
     volOAEbase_yr = sum(OAE_outputs["Qout"][0:8760]*3600) # (m3/yr) Volume of alkaline seawater added to ocean
