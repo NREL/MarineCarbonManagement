@@ -59,7 +59,7 @@ class OAEInputs:
     N_edMax: int = field(default=10, validator=gt_zero)
     E_HCl: float = field(default=None)
     E_NaOH: float = field(default=None)
-    Q_edMax: float = field(default=(660 + 495) / 1000 / 60, validator=gt_zero)
+    Q_edMax: float = field(default=(660 + 495) / 1000 / 60*1, validator=gt_zero)
     Q_OMax: float = field(default=None)
     frac_EDflow: float = field(default=None)
     frac_baseFlow: float = field(default=660 / (660 + 495), validator=range_val(0, 1))
@@ -124,6 +124,7 @@ class SeaWaterInputs:
     Derived Attributes:
         kw (float): Water dissociation constant at the specified temperature and salinity.
         sal_i (float): Salinity converted to mol NaCl/m³.
+        SAL_i_mol_m3 (float): Salinity in mol NaCl/m³.
         h_i (float): Initial hydrogen ion concentration in mol/L.
         dic_iu (float): Initial DIC in µmol/kg.
         ta_i (float): Total alkalinity in mol/L.
@@ -138,6 +139,7 @@ class SeaWaterInputs:
 
     kw: float = field(init=False)
     sal_i: float = field(init=False)
+    SAL_i_mol_m3: float = field(init=False)
     h_i: float = field(init=False)
     dic_iu: float = field(init=False)
     ta_i: float = field(init=False)
@@ -163,6 +165,7 @@ class SeaWaterInputs:
 
         # Convert salinity to mol NaCl/m³
         self.sal_i = sal_ppt_to_m(self.sal_ppt_i)
+        self.SAL_i_mol_m3 = self.sal_i * 1000
 
         # Calculate initial hydrogen ion concentration
         self.h_i = 10**-self.pH_i
@@ -171,14 +174,15 @@ class SeaWaterInputs:
         self.dic_iu = m_to_umol_per_kg(self.dic_i)
 
         # Use PyCO2SYS to calculate total alkalinity
-        results = pyco2.sys(
+        kwargs = dict(
             par1=self.dic_iu,
             par2=self.pH_i,
             par1_type=2,  # DIC
             par2_type=3,  # pH
-            salinity=self.sal_ppt_i, # Salinity of the sample (ppt)
-            temperature=self.tempC_i, # Temperature at input conditions (C)
+            salinity=self.sal_ppt_i,  # Salinity of the sample (ppt)
+            temperature=self.tempC_i,  # Temperature at input conditions (C)
         )
+        results = pyco2.sys(**kwargs)
         self.ta_i = umol_per_kg_to_m(results["alkalinity"])
         self.ca_i = umol_per_kg_to_m(results["total_calcium"])
 
@@ -669,10 +673,6 @@ class OAERangeOutputs:
         S2_tot_range (int): Number of ED units active in S2.
         pump_power_min (float): Minimum pump power in MW.
         pump_power_max (float): Maximum pump power in MW.
-        sep_power_min (float): Minimum separation power in MW.
-        sep_power_max (float): Maximum separation power in MW.
-        comp_power_min (float): Minimum compression power in MW.
-        comp_power_max (float): Maximum compression power in MW.
     """
 
     S1: dict
@@ -801,13 +801,13 @@ def initialize_power_chemical_ranges(
         C_a = (1 / p.pumpA.Q) * (
             P_EDi / (3600 * (E_HCl * 1000)) - (p.pumpED.Q * h_i * 1000)
         )  # (mol/m3) Acid concentration from ED units
-        if C_a > seawater_config.sal_i:
-            C_a = seawater_config.sal_i  # Limit acid concentration to seawater salinity
+        if C_a > seawater_config.SAL_i_mol_m3:
+            C_a = seawater_config.SAL_i_mol_m3  # Limit acid concentration to seawater salinity
             warnings.warn(
-                f"{__name__}: Acid concentration exceeds seawater salinity. Limiting to {C_a:.2f} mol/m³. Check the ED efficiency input value",
+                f"S1: Acid concentration exceeds seawater salinity. Limiting to {C_a:.2f} mol/m³. Check the ED efficiency input value",
                 UserWarning,
             )
-        n_sal_a = (seawater_config.sal_i - C_a) * p.pumpB.Q # (mol/s) NaCl needed to maintain salinity
+        n_sal_a = (seawater_config.SAL_i_mol_m3 - C_a) * p.pumpB.Q # (mol/s) NaCl needed to maintain salinity
         S1["c_a"][i] = C_a / 1000  # (mol/L) Acid concentration from ED units
         S1["volExcessAcid"][i] = p.pumpA.Q * 3600 # (m3) all acid made is excess
         S1["mol_HCl"][i] = C_a * p.pumpA.Q * 3600 # (mol) Excess acid generated
@@ -815,13 +815,14 @@ def initialize_power_chemical_ranges(
         C_b = (1 / p.pumpB.Q) * (
             P_EDi / (3600 * (E_NaOH * 1000)) - (p.pumpED.Q * (kw / h_i) * 1000)
         )  # (mol/m3) Base concentration from ED units
-        if C_b > seawater_config.sal_i:
-            C_b = seawater_config.sal_i
+
+        if C_b > seawater_config.SAL_i_mol_m3:
+            C_b = seawater_config.SAL_i_mol_m3
             warnings.warn(
-                f"{__name__}: Base concentration exceeds seawater salinity. Limiting to {C_b:.2f} mol/m³. Check the ED efficiency input value",
+                f"S1: Base concentration exceeds seawater salinity. Limiting to {C_b:.2f} mol/m³. Check the ED efficiency input value",
                 UserWarning,
             )
-        n_sal_b = (seawater_config.sal_i - C_b) * p.pumpB.Q # mol/s of nacl after creation of base
+        n_sal_b = (seawater_config.SAL_i_mol_m3 - C_b) * p.pumpB.Q # mol/s of nacl after creation of base
         SAL_b = n_sal_b / p.pumpB.Q # (mol/m3) concentration of nacl after base formation
         S1["c_b"][i] = C_b / 1000  # (mol/L) Base concentration from ED units
         S1["mol_OH"][i] = C_b * p.pumpB.Q * 3600 # (mol) OH added to seawater
@@ -841,7 +842,7 @@ def initialize_power_chemical_ranges(
 
         # Find effluent chem after base addition
         ta_fu = m_to_umol_per_kg(S1["ta_f"][i]) 
-        SAL_f = (SAL_b * p.pumpB.Q + seawater_config.sal_i * p.pumpI.Q) / (
+        SAL_f = (SAL_b * p.pumpB.Q + seawater_config.SAL_i_mol_m3 * p.pumpI.Q) / (
             p.pumpB.Q + p.pumpI.Q
         )
         S1["sal_f"][i] = sal_m_to_ppt(SAL_f/1000) # (ppt) Salinity after base addition
@@ -880,8 +881,8 @@ def initialize_power_chemical_ranges(
             ta_fu = m_to_umol_per_kg(S1["ta_f"][i])
             
             # Find new salinity
-            SAL_a = rca.results["final_salinity_M"] * 1000 # (mol/m3) salinity of the acid
-            SAL_f = (SAL_b*p.pumpB.Q + seawater_config.sal_i*p.pumpI.Q + SAL_a*p.pumpA.Q)/(p.pumpB.Q + p.pumpI.Q + p.pumpA.Q)
+            SAL_a = rca.results["sal_a"] * 1000 # (mol/m3) salinity of the acid
+            SAL_f = (SAL_b*p.pumpB.Q + seawater_config.SAL_i_mol_m3*p.pumpI.Q + SAL_a*p.pumpA.Q)/(p.pumpB.Q + p.pumpI.Q + p.pumpA.Q)
             S1["sal_f"][i] = sal_m_to_ppt(SAL_f/1000) # ppt
             
             # Find new calcium concentration
@@ -964,7 +965,7 @@ def initialize_power_chemical_ranges(
         p.pumpA.Q = 0 # No waste acid is pumped in this case
 
         # Change in volume due to acid and base use
-        S3["volExcessAcid"][i] = -p.pumpA.Q * 3600 # (m3) volume of acid lost by the tank
+        # S3["volAcid"][i] = -p.pumpA.Q * 3600 # (m3) volume of acid lost by the tank
         S3["volBase"][i] = -p.pumpB.Q * 3600  # (m3) volume of base lost by the tank
 
         # The concentration of acid and base produced does not vary with flow rate
@@ -973,13 +974,13 @@ def initialize_power_chemical_ranges(
             P_ed1 * N_edMin / (3600 * (E_NaOH * 1000))
             - (p.pumpED.Q_min * (kw / h_i) * 1000)
         )  # (mol/m3) Base concentration from ED units
-        if C_b > seawater_config.sal_i:
-            C_b = seawater_config.sal_i
+        if C_b > seawater_config.SAL_i_mol_m3:
+            C_b = seawater_config.SAL_i_mol_m3
             warnings.warn(
-                f"{__name__}: Base concentration exceeds seawater salinity. Limiting to {C_b:.2f} mol/m³. Check the ED efficiency input value",
+                f"S3: Base concentration exceeds seawater salinity. Limiting to {C_b:.2f} mol/m³. Check the ED efficiency input value",
                 UserWarning,
             )
-        n_sal_b = (seawater_config.sal_i - C_b) * p.pumpB.Q # mol/s of nacl after creation of base
+        n_sal_b = (seawater_config.SAL_i_mol_m3 - C_b) * p.pumpB.Q # mol/s of nacl after creation of base
         SAL_b = n_sal_b / p.pumpB.Q # (mol/m3) concentration of nacl after base formation
         
         S3["c_b"][i] = C_b / 1000  # (mol/L) Base concentration used in S3
@@ -996,7 +997,7 @@ def initialize_power_chemical_ranges(
 
         # Find effluent chem after base addition
         ta_fu = m_to_umol_per_kg(S3["ta_f"][i]) 
-        SAL_f = (SAL_b * p.pumpB.Q + seawater_config.sal_i * p.pumpI.Q) / (
+        SAL_f = (SAL_b * p.pumpB.Q + seawater_config.SAL_i_mol_m3 * p.pumpI.Q) / (
             p.pumpB.Q + p.pumpI.Q
         )
         S3["sal_f"][i] = sal_m_to_ppt(SAL_f/1000) # (ppt) Salinity after base addition
@@ -1027,8 +1028,8 @@ def initialize_power_chemical_ranges(
             ## The neutralized acid is mixed with the alkaline seawater
             # Find amount of RCA added
             S3["alkaline_to_acid"][i] = rca.results["rca_loading_g_per_L"] # (g/L) loading of RCA mass to volume of acid
-            S3["alkaline_solid_added"][i] = rca.results["rca_loading_g_per_L"]*S3["volAcid"][i]*1000 # (g) mass of RCA used to neutralize the acid
-            slurry_mass = S3["alkaline_solid_added"][i] + S3["volAcid"][i]*R_H2O*1000 # (g) mass of the RCA and acid slurry
+            S3["alkaline_solid_added"][i] = rca.results["rca_loading_g_per_L"]*-S3["volAcid"][i]*1000 # (g) mass of RCA used to neutralize the acid
+            slurry_mass = S3["alkaline_solid_added"][i] + -S3["volAcid"][i]*R_H2O*1000 # (g) mass of the RCA and acid slurry
             S3["rca_power"][i] = rca.Wpg_rca * slurry_mass  # (W) power needed to tumble the RCA and acid
             
             # Find new TA
@@ -1038,8 +1039,8 @@ def initialize_power_chemical_ranges(
             ta_fu = m_to_umol_per_kg(S3["ta_f"][i])
             
             # Find new salinity
-            SAL_a = rca.results["final_salinity_M"] * 1000 # (mol/m3) salinity of the acid
-            SAL_f = (SAL_b * p.pumpB.Q + seawater_config.sal_i * p.pumpI.Q + SAL_a* p.pumpA.Q)/(
+            SAL_a = rca.results["sal_a"] * 1000 # (mol/m3) salinity of the acid
+            SAL_f = (SAL_b * p.pumpB.Q + seawater_config.SAL_i_mol_m3 * p.pumpI.Q + SAL_a* p.pumpA.Q)/(
                 p.pumpB.Q + p.pumpI.Q + p.pumpA.Q)
             S3["sal_f"][i] = sal_m_to_ppt(SAL_f/1000) # ppt
             
@@ -1119,24 +1120,24 @@ def initialize_power_chemical_ranges(
         C_a = (1 / p.pumpA.Q) * (
             P_EDi / (3600 * (E_HCl * 1000)) - (p.pumpED4.Q * h_i * 1000)
         )  # (mol/m3) Acid concentration from ED units
-        if C_a > seawater_config.sal_i:
-            C_a = seawater_config.sal_i  # Limit acid concentration to seawater salinity
+        if C_a > seawater_config.SAL_i_mol_m3:
+            C_a = seawater_config.SAL_i_mol_m3  # Limit acid concentration to seawater salinity
             warnings.warn(
-                f"{__name__}: Acid concentration exceeds seawater salinity. Limiting to {C_a:.2f} mol/m³. Check the ED efficiency input value",
+                f"S4: Acid concentration exceeds seawater salinity. Limiting to {C_a:.2f} mol/m³. Check the ED efficiency input value",
                 UserWarning,
             )
-        n_sal_a = (seawater_config.sal_i - C_a) * p.pumpB.Q # (mol/s) NaCl needed to maintain salinity
+        n_sal_a = (seawater_config.SAL_i_mol_m3 - C_a) * p.pumpB.Q # (mol/s) NaCl needed to maintain salinity
         S4["c_a"][i] = C_a / 1000  # (mol/L) Acid concentration from ED units
         C_b = (1 / p.pumpB.Q) * (
             P_EDi / (3600 * (E_NaOH * 1000)) - (p.pumpED4.Q * (kw / h_i) * 1000)
         )  # (mol/m3) Base concentration from ED units
-        if C_b > seawater_config.sal_i:
-            C_b = seawater_config.sal_i
+        if C_b > seawater_config.SAL_i_mol_m3:
+            C_b = seawater_config.SAL_i_mol_m3
             warnings.warn(
-                f"{__name__}: Base concentration exceeds seawater salinity. Limiting to {C_b:.2f} mol/m³. Check the ED efficiency input value",
+                f"S4: Base concentration exceeds seawater salinity. Limiting to {C_b:.2f} mol/m³. Check the ED efficiency input value",
                 UserWarning,
             )
-        n_sal_b = (seawater_config.sal_i - C_b) * p.pumpB.Q # mol/s of nacl after creation of base
+        n_sal_b = (seawater_config.SAL_i_mol_m3 - C_b) * p.pumpB.Q # mol/s of nacl after creation of base
         SAL_b = n_sal_b / p.pumpB.Q # (mol/m3) concentration of nacl after base formation
         S4["c_b"][i] = C_b / 1000  # (mol/L) Base concentration from ED units
 
@@ -1209,26 +1210,26 @@ def initialize_power_chemical_ranges(
         C_a = (1 / p.pumpA.Q) * (
             P_EDi / (3600 * (E_HCl * 1000)) - (p.pumpED.Q * h_i * 1000)
         )  # (mol/m3) Acid concentration from ED units
-        if C_a > seawater_config.sal_i:
-            C_a = seawater_config.sal_i
+        if C_a > seawater_config.SAL_i_mol_m3:
+            C_a = seawater_config.SAL_i_mol_m3
             warnings.warn(
-                f"{__name__}: Acid concentration exceeds seawater salinity. Limiting to {C_a:.2f} mol/m³. Check the ED efficiency input value",
+                f"S2: Acid concentration exceeds seawater salinity. Limiting to {C_a:.2f} mol/m³. Check the ED efficiency input value",
                 UserWarning,
             )
-        n_sal_a = (seawater_config.sal_i - C_a) * p.pumpB.Q  # (mol/s) NaCl needed to maintain salinity
+        n_sal_a = (seawater_config.SAL_i_mol_m3 - C_a) * p.pumpB.Q  # (mol/s) NaCl needed to maintain salinity
         S2["c_a"][i] = C_a / 1000  # (mol/L) Acid concentration from ED units
         S2["mol_HCl"][i] = C_a * p.pumpA.Q * 3600  # (mol) Excess acid generated
 
         C_b = (1 / p.pumpB.Q) * (
             P_EDi / (3600 * (E_NaOH * 1000)) - (p.pumpED.Q * (kw / h_i) * 1000)
         )  # (mol/m3) Base concentration from ED units
-        if C_b > seawater_config.sal_i:
-            C_b = seawater_config.sal_i
+        if C_b > seawater_config.SAL_i_mol_m3:
+            C_b = seawater_config.SAL_i_mol_m3
             warnings.warn(
-                f"{__name__}: Base concentration exceeds seawater salinity. Limiting to {C_b:.2f} mol/m³. Check the ED efficiency input value",
+                f"S2: Base concentration exceeds seawater salinity. Limiting to {C_b:.2f} mol/m³. Check the ED efficiency input value",
                 UserWarning,
             )
-        n_sal_b = (seawater_config.sal_i - C_b) * p.pumpB.Q # mol/s of nacl after creation of base
+        n_sal_b = (seawater_config.SAL_i_mol_m3 - C_b) * p.pumpB.Q # mol/s of nacl after creation of base
         SAL_b = n_sal_b / p.pumpB.Q # (mol/m3) concentration of nacl after base formation
     
         S2["c_b"][i] = C_b / 1000  # (mol/L) Base concentration from ED units
@@ -1261,7 +1262,7 @@ def initialize_power_chemical_ranges(
 
         # Find effluent chem after base addition
         ta_fu = m_to_umol_per_kg(S2["ta_f"][i]) 
-        SAL_f = (SAL_b * Q_bOAE + seawater_config.sal_i * p.pumpI.Q) / (
+        SAL_f = (SAL_b * Q_bOAE + seawater_config.SAL_i_mol_m3 * p.pumpI.Q) / (
             Q_bOAE + p.pumpI.Q
         )
         S2["sal_f"][i] = sal_m_to_ppt(SAL_f/1000) # (ppt) Salinity after base addition
@@ -1305,8 +1306,8 @@ def initialize_power_chemical_ranges(
             ta_fu = m_to_umol_per_kg(S2["ta_f"][i])
 
             # Find new salinity
-            SAL_a = rca.results["final_salinity_M"] * 1000 # (mol/m3) salinity of the acid
-            SAL_f = (SAL_b*Q_bOAE + seawater_config.sal_i * p.pumpI.Q + SAL_a*Q_aRCA)/(
+            SAL_a = rca.results["sal_a"] * 1000 # (mol/m3) salinity of the acid
+            SAL_f = (SAL_b*Q_bOAE + seawater_config.SAL_i_mol_m3 * p.pumpI.Q + SAL_a*Q_aRCA)/(
                 Q_bOAE + p.pumpI.Q + Q_aRCA)
             S2["sal_f"][i] = sal_m_to_ppt(SAL_f/1000) # ppt
             
@@ -1851,7 +1852,7 @@ def simulate_ocean_alkalinity_enhancement(
             # Update recorded values based on number of ED units active
             OAE_outputs["volExcessAcid"][i] = ranges.S5["volExcessAcid"]
             OAE_outputs["volBase"][i] = ranges.S5["volBase"]
-            OAE_outputs["volAcid"][i] = ranges.S5["volAcid"]
+            OAE_outputs["volAcid"][i] = ranges.S5["volAcid"].item()
             OAE_outputs["mol_OH"][i] = ranges.S5["mol_OH"]
             OAE_outputs["mol_HCl"][i] = ranges.S5["mol_HCl"]
             OAE_outputs["pH_f"][i] = ranges.S5["pH_f"]
@@ -2155,7 +2156,7 @@ def run_ocean_alkalinity_enhancement_physics_model(
                 "Acid Production Efficiency (Wh/mol HCl)": round(oae_config.E_HCl*1000, 2),
                 "Base Production Efficiency (Wh/mol NaOH)": round(oae_config.E_NaOH*1000, 2),
                 "Method of Acid Disposal": oae_config.acid_disposal_method,
-                "Average Seawater Temperature (C)": seawater_config.tempC,
+                "Average Seawater Temperature (C)": seawater_config.tempC_i,
                 "Average Seawater Salinity (ppt)": round(seawater_config.sal_ppt_i,2),
                 "Initial Seawater pH": seawater_config.pH_i,
                 "Initial Seawater DIC (M)": seawater_config.dic_i,
@@ -2163,7 +2164,7 @@ def run_ocean_alkalinity_enhancement_physics_model(
             diDF = pd.DataFrame(design_inputs, index=[0]).T
             diDF = diDF.reset_index()
             diDF.columns = ["Parameter", "Values"]
-            diDF.to_csv(save_paths[1] + "OAE_timeDependentResults.csv", index=False)
+            diDF.to_csv(save_paths[1] + "OAE_resultTotals.csv", index=False)
 
             # Time Dependent Inputs and Results
             timeDepDict = {
@@ -2350,8 +2351,8 @@ def run_ocean_alkalinity_enhancement_physics_model(
                 * oae_config.N_edMin,2),
                 "Max ED Power (W)": round(oae_config.P_ed1
                 * oae_config.N_edMax,2),
-                "Min Pump Power (W)": round(ranges.pump_power_min,3),
-                "Max Pump Power (W)": round(ranges.pump_power_max,3),
+                "Min Pump Power (W)": round(ranges.pump_power_min*10e6,3),
+                "Max Pump Power (W)": round(ranges.pump_power_max*10e6,3),
                 "Min Intake Pump Flow Rate (m3/s)": round(ranges.pumps.pumpO.Q_min,2),
                 "Max Intake Pump Flow Rate (m3/s)": round(ranges.pumps.pumpO.Q_max,2),
                 "Average Moles of Excess Acid Generated (molHCl/yr)": round(res.mol_HCl_yr,2),
