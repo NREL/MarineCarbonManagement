@@ -2118,7 +2118,7 @@ def run_ocean_alkalinity_enhancement_physics_model(
         else:
             pHavgOut[i] = seawater_config.pH_i
             dicOut[i] = seawater_config.dic_i
-            salOut[i] = seawater_config.sal
+            salOut[i] = seawater_config.sal_ppt_i
             taOut[i] = seawater_config.ta_i
             tempOut[i] = seawater_config.tempC
             caOut[i] = seawater_config.ca_i
@@ -2150,7 +2150,7 @@ def run_ocean_alkalinity_enhancement_physics_model(
             }
             diDF = pd.DataFrame(design_inputs, index=[0]).T
             diDF = diDF.reset_index()
-            diDF.columns = ["Parameter", "Values"]
+            diDF.columns = ["Design Input", "Values"]
             diDF.to_csv(save_paths[1] + "OAE_resultTotals.csv", index=False)
 
             # Time Dependent Inputs and Results
@@ -2459,27 +2459,322 @@ def run_ocean_alkalinity_enhancement_physics_model(
         else:
             ax1.set_ylim(bottom=ax1_ylims[1] * ax2_yratio)
         # Show the plot
-        if show_plots:
-            plt.show()
         if save_plots:
             plt.savefig(
                 save_paths[0] + "OAE_Time-Dependent_Results.png", bbox_inches="tight"
             )
+        if show_plots:
+            plt.show()
 
         return (ranges, res)
     
-if __name__ == "__main__":
-    test = OAEInputs()
+@define
+class OAECostInputs:
+    """Inputs for the ocean alkalinity enhancement cost model.
 
-    res1 = initialize_power_chemical_ranges(
-        oae_config=OAEInputs(),
-        pump_config=PumpInputs(),
-        seawater_config=SeaWaterInputs(),
-        rca=RCALoadingCalculator(oae=OAEInputs(),
-                                 seawater=SeaWaterInputs())
+    Attributes:
+        mass_product (float): Mass of products made (tonnes/yr).
+        value_product(float): Value of products ($/tonne).
+        waste_mass (float): Mass of waste made (tonnes/yr).
+        waste_disposal_cost (float): Cost of waste disposal ($/tonne).
+        avg_base_added_seawater (float): Average moles of base added to seawater (molOH/yr).
+        base_added_seawater_max_power (float): Base added to seawater under 100% max power (molOH/yr).
+        mass_rca (float): Mass of RCA tumbler slurry (g).
+        acid_disposal_method (float): Method of acid disposal, with options "sell rca", "sell acid" or "acid disposal". Defaults to "sell rca".
+
+        ed_system_cost (float): Capital cost of the electrodialysis (ED) system ($).
+        bop_cost (float): Balance of plant cost, including pumps, tanks, and filtration systems ($).
+        import_tariff (float): Import tariff on foreign equipment ($).
+        transportation_cost (float): Transportation cost for equipment and materials ($).
+        yard_improvements_cost (float): Cost for civil works and yard improvements ($).
+        lab_equipment_cost (float): Capital cost of laboratory equipment ($).
+        piping_system_cost (float): Cost of the plant piping system ($).
+        land_area_m2 (float): Total land area required for the plant (m²).
+        land_cost_per_m2 (float): Land cost per square meter at the plant site ($/m²).
+
+        annual_raw_materials_cost (float): Yearly cost of raw materials such as Na₂SO₄, NaOH, HCl, and demineralized water ($/year).
+        annual_labor_cost (float): Yearly cost of plant labor ($/year).
+        annual_lab_qc_rd_cost (float): Yearly cost for lab operations, quality control, and R&D ($/year).
+        annual_consumables_cost (float): Yearly cost of consumables used in operations ($/year).
+        annual_transport_cost (float): Yearly cost of transportation for logistics ($/year).
+        annual_misc_cost (float): Yearly miscellaneous costs such as marketing and administrative expenses ($/year).
+        annual_royalty_cost (float): Yearly royalty payments ($/year).
+
+        startup_cost (float): One-time startup cost for plant commissioning and integration ($).
+        upfront_rd_cost (float): One-time cost for R&D incurred prior to plant commissioning ($).
+        upfront_royalty_cost (float): One-time royalty payment made before operations begin ($).
+
+        num_membrane_replacements (int): Total number of ED membrane replacements over the plant lifetime.
+        plant_lifetime_yrs (int): Operational lifetime of the plant (years).
+        inflation_rate (float): Annual inflation rate as a decimal (e.g., 0.015 for 1.5%).
+        recovery_period_yrs (int): Financial recovery period for investment returns (years).
+        interest_rate (float): Annual interest rate used in financial calculations (decimal).
+        corporate_tax_rate (float): Corporate tax rate applied to net profits (decimal).
+    """
+    mass_product: float = field(validator=gt_zero)
+    value_product: float = field(validator=gt_zero)
+    waste_mass: float = field()
+    waste_disposal_cost: float = field(validator=gt_zero)
+    avg_base_added_seawater: float = field(validator=gt_zero)
+    base_added_seawater_max_power: float = field(validator=gt_zero)
+    mass_rca: float = field(validator=gt_zero)
+    acid_disposal_method: str = field(default="sell rca", validator=contains(["sell acid", "sell rca", "acid disposal"]))
+
+    # --- Direct Capital Costs ---
+    ed_system_cost: float = field(default=1_819_238, validator=gt_zero)  # $
+    bop_cost: float = field(default=1_243_308, validator=gt_zero)        # $
+    import_tariff: float = field(default=26_839, validator=gt_zero)      # $
+    transportation_cost: float = field(default=146_446, validator=gt_zero)  # $
+    yard_improvements_cost: float = field(default=188_735, validator=gt_zero)  # $
+    lab_equipment_cost: float = field(default=50_000, validator=gt_zero)     # $
+    piping_system_cost: float = field(default=161_492, validator=gt_zero)    # $
+    land_area_m2: float = field(default=70**2, validator=gt_zero)            # m²
+    land_cost_per_m2: float = field(default=38.0, validator=gt_zero)         # $/m²
+
+    # --- Technical Operating Costs (Annual) ---
+    annual_raw_materials_cost: float = field(default=139_708, validator=gt_zero)  # $/yr
+    annual_labor_cost: float = field(default=228_000, validator=gt_zero)          # $/yr
+    annual_lab_qc_rd_cost: float = field(default=10_000, validator=gt_zero)       # $/yr
+    annual_consumables_cost: float = field(default=15_000, validator=gt_zero)     # $/yr
+    annual_transport_cost: float = field(default=0.0)                             # $/yr
+    annual_misc_cost: float = field(default=7_000, validator=gt_zero)             # $/yr
+    annual_royalty_cost: float = field(default=0.0)                               # $/yr
+
+    # --- Upfront Capital Cost Adjustments ---
+    startup_cost: float = field(default=20_000, validator=gt_zero)               # $
+    upfront_rd_cost: float = field(default=15_000, validator=gt_zero)            # $
+    upfront_royalty_cost: float = field(default=0.0)                              # $
+
+    # --- Fixed Inputs ---
+    num_membrane_replacements: int = field(default=6, validator=gt_zero)
+    plant_lifetime_yrs: int = field(default=20, validator=gt_zero)
+    inflation_rate: float = field(default=0.015, validator=range_val(0.0, 1.0))
+    recovery_period_yrs: int = field(default=10, validator=gt_zero)
+    interest_rate: float = field(default=0.0425, validator=range_val(0.0, 1.0))
+    corporate_tax_rate: float = field(default=0.2984, validator=range_val(0.0, 1.0))
+
+    def __attrs_post_init__(self):
+        # Constants from Ferella 2025
+        cf_lit = 330 / 365
+        N_naoh100 = self.base_added_seawater_max_power
+        N_naohEq = cf_lit * N_naoh100
+        N_naohLit = 24_948_000  # mol/year
+        lr = 0.20
+        b = -1 * math.log2(1 - lr)
+        f_adj = (N_naohEq / N_naohLit) ** (1 - b)
+
+        # Default values before scaling for comparison
+        default_vals = {
+            "ed_system_cost": 1_819_238,
+            "bop_cost": 1_243_308,
+            "import_tariff": 26_839,
+            "transportation_cost": 146_446,
+            "yard_improvements_cost": 188_735,
+            "lab_equipment_cost": 50_000,
+            "piping_system_cost": 161_492,
+            "land_area_m2": 70**2,
+            "annual_raw_materials_cost": 139_708,
+            "annual_labor_cost": 228_000,
+            "annual_lab_qc_rd_cost": 10_000,
+            "annual_consumables_cost": 15_000,
+            "annual_misc_cost": 7_000,
+            "startup_cost": 20_000,
+            "upfront_rd_cost": 15_000,
+        }
+
+        # Scale only fields that are unchanged from defaults
+        for field_name, base_val in default_vals.items():
+            if getattr(self, field_name) == base_val:
+                setattr(self, field_name, base_val * f_adj)
+
+
+@define
+class OAECostOutputs:
+    """
+    Outputs from the electrodialysis cost model. If default cost model is used all costs are in 2023 USD.
+
+    Attributes:
+        initial_capital_cost (float): Total initial capital cost of the electrodialysis system.
+        yearly_capital_cost (float): Yearly capital cost for the electrodialysis system.
+        yearly_operational_cost (float): Yearly operational cost excluding energy costs for the electrodialysis system.
+        initial_bop_capital_cost (float): Initial capital cost for the Balance of Plant (BOP).
+        yearly_bop_capital_cost (float): Yearly capital cost for the BOP.
+        yearly_bop_operational_cost (float): Yearly operational cost for the BOP, excluding energy costs.
+        initial_ed_capital_cost (float): Initial capital cost for the electrodialysis unit.
+        yearly_ed_capital_cost (float): Yearly capital cost for the electrodialysis unit.
+        yearly_ed_operational_cost (float): Yearly operational cost for the electrodialysis unit, excluding energy costs.
+        initial_tank_capital_cost (float): Initial capital cost of the tanks.
+        yearly_tank_cost (float): Yearly capital cost for the tanks.
+    """
+
+    initial_capital_cost: float
+    yearly_capital_cost: float
+    yearly_operational_cost: float
+    initial_bop_capital_cost: float
+    yearly_bop_capital_cost: float
+    yearly_bop_operational_cost: float
+    initial_ed_capital_cost: float
+    yearly_ed_capital_cost: float
+    yearly_ed_operational_cost: float
+    initial_tank_capital_cost: float
+    yearly_tank_cost: float
+
+
+def oae_cost_model(
+    cost_config: OAECostInputs,
+    save_outputs=False,
+    output_dir="./output/",
+) -> OAECostOutputs:
+    """
+    Calculates the costs associated with electrodialysis based on user inputs or default literature values.
+
+    Args:
+        cost_config (ElectrodialysisCostInputs): Configuration object containing user-defined or default inputs
+                                                 for the electrodialysis cost model. Includes infrastructure type,
+                                                 yearly CO2 capture, and cost settings.
+
+    Returns:
+        ElectrodialysisCostOutputs: Object containing calculated capital and operational costs,
+                                    both initial and yearly, for the electrodialysis system.
+
+    Calculation Logic:
+        - If `user_costs` is True, the model directly uses the costs provided by the user.
+        - If `user_costs` is False, the model calculates costs using default values from literature,
+          applying learning rates and amortization as necessary.
+        - The infrastructure type ('desal', 'swCool', or 'new') determines the baseline costs, which
+          are then adjusted based on the modeled CO2 capture capacity.
+
+    Raises:
+        ValueError: If the `infrastructure_type` is not one of 'desal', 'swCool', or 'new'.
+    """
+    ed = cost_config.electrodialysis_inputs
+
+    if cost_config.user_costs:
+        # Use user-provided costs
+        CEyr = cost_config.yearly_capital_cost
+        BOPcapYr = cost_config.yearly_bop_capital_cost
+        EDcapYr = cost_config.yearly_ed_capital_cost
+        OEnoEyr = cost_config.yearly_operational_cost
+        BOPopNoEyr = cost_config.yearly_bop_operational_cost
+        EDopNoEyr = cost_config.yearly_ed_operational_cost
+        CEi = cost_config.initial_capital_cost
+        BOPcapI = cost_config.initial_bop_capital_cost
+        EDcapI = cost_config.initial_ed_capital_cost
+    else:
+        infra_costs = {
+            "desal": (253, 197, 204, 159, 48, 39),
+            "swCool": (512, 263, 466, 228, 46, 35),
+            "new": (1484, 530, 1434, 509, 49, 21),
+        }
+        if cost_config.infrastructure_type not in infra_costs:
+            raise ValueError(
+                "`infrastructure_type` must be 'desal', 'swCool', or 'new'"
+            )
+
+        CEco2, OEnoEco2, BOPcapCo2, BOPopNoEco2, EDcapCo2, EDopNoEco2 = infra_costs[
+            cost_config.infrastructure_type
+        ]
+
+        # Amortization
+        r_int = 0.05  # Rate of interest or return (5%)
+        n_pay = 12  # Number of monthly payments in a year (12)
+        t_amor = 20  # (years) Amortization time (20 years)
+        amort_factor = (1 - (1 + r_int / n_pay) ** (-n_pay * t_amor)) / r_int
+
+        tankCapI = (
+            cost_config.cost_per_unit_volume_tanks * cost_config.total_tank_volume
+        )  # (2023$) total cost of tanks
+        cpCO2_Tanks = (
+            tankCapI / cost_config.mCC_yr
+        )  # (2023$/tCO2) cost of tanks per tCO2 captured yearly
+        tankCapYr = tankCapI / amort_factor
+
+        # Apply learning rate
+        lr = 0.2  # learning rate assumed to be 20% (20% is considered a fast learning rate for DAC, 15% is common for desal, and ~9-12% is common for offshore wind)
+        capFactLit = (
+            0.934  # Capacity factor from literature needed for capital cost (93.4%)
+        )
+        mCC_yr_lit = 20 * ed.co2_mm / 1000 * capFactLit * 24 * 365
+        mCC_yr_mod = cost_config.max_theoretical_mCC * capFactLit * 24 * 365
+        b = -math.log2(1 - lr)
+        CEco2Mod = CEco2 * (mCC_yr_mod / mCC_yr_lit) ** (-b)
+        BOPcapCo2Mod = BOPcapCo2 * (mCC_yr_mod / mCC_yr_lit) ** (-b)
+        EDcapCo2Mod = EDcapCo2 * (mCC_yr_mod / mCC_yr_lit) ** (-b)
+
+        # Calculate Yearly CapEx
+        CEyr = CEco2Mod * mCC_yr_mod + tankCapYr
+        BOPcapYr = BOPcapCo2Mod * mCC_yr_mod + tankCapYr
+        EDcapYr = EDcapCo2Mod * mCC_yr_mod
+
+        # Calculate Yearly OpEx
+        OEnoEyr = OEnoEco2 * cost_config.mCC_yr
+        BOPopNoEyr = BOPopNoEco2 * cost_config.mCC_yr
+        EDopNoEyr = EDopNoEco2 * cost_config.mCC_yr
+
+        # Calculate Initial CapEx
+        CEi = CEyr * amort_factor
+        BOPcapI = BOPcapYr * amort_factor
+        EDcapI = EDcapYr * amort_factor
+
+    if save_outputs:
+        save_paths = [output_dir + "figures/", output_dir + "data/"]
+
+        for savepath in save_paths:
+            if not os.path.exists(savepath):
+                os.makedirs(savepath)
+        # Totals for Simulations
+        cost_result = {
+            "Infrastructure Type": cost_config.infrastructure_type,
+            "Initial Capital Cost (2023$/yr)": CEi,
+            "Yearly Capital Cost (2023$/yr)": CEyr,
+            "Yearly Operational Cost (Not Including Energy Costs) (2023$/yr)": OEnoEyr,
+            "Total Yearly Cost (Not Including Electricity Costs) (2023$/yr)": CEyr
+            + OEnoEyr,
+            "Total Yearly Cost (Not Including Electricity Costs) (2023$/tCO2)": (
+                CEyr + OEnoEyr
+            )
+            / cost_config.mCC_yr,
+            "Initial ED Capital Cost (2023$)": EDcapI,
+            "Yearly ED Cost (Without Electricity Costs) (2023$/yr)": EDcapYr
+            + EDopNoEyr,
+            "Initial BOP Capital Cost (2023$)": BOPcapI,
+            "Yearly BOP Cost (Without Electricity Costs) (2023$/yr)": BOPcapYr
+            + BOPopNoEyr,
+            "Tank Capital Cost (2023$)": tankCapI,
+            "Yearly Tank Cost (2023$/yr)": tankCapYr,
+        }
+        totsDF = pd.DataFrame(cost_result, index=[0]).T
+        totsDF = totsDF.reset_index()
+        totsDF.columns = ["Parameter", "Values"]
+        totsDF.to_csv(save_paths[1] + "DOC_cost_results.csv")
+
+    return OAECostOutputs(
+        initial_capital_cost=CEi,
+        yearly_capital_cost=CEyr,
+        yearly_operational_cost=OEnoEyr,
+        initial_bop_capital_cost=BOPcapI,
+        yearly_bop_capital_cost=BOPcapYr,
+        yearly_bop_operational_cost=BOPopNoEyr,
+        initial_ed_capital_cost=EDcapI,
+        yearly_ed_capital_cost=EDcapYr,
+        yearly_ed_operational_cost=EDopNoEyr,
+        initial_tank_capital_cost=tankCapI,
+        yearly_tank_cost=tankCapYr,
     )
 
-    # EXAMPLE: Sin function for power input
+    
+if __name__ == "__main__":
+    # test = OAEInputs()
+
+    # res1 = initialize_power_chemical_ranges(
+    #     oae_config=OAEInputs(),
+    #     pump_config=PumpInputs(),
+    #     seawater_config=SeaWaterInputs(),
+    #     rca=RCALoadingCalculator(oae=OAEInputs(),
+    #                              seawater=SeaWaterInputs())
+    # )
+
+    #EXAMPLE: Sin function for power input
     days = 365
     exTime = np.zeros(24 * days)  # Example time in hours
     for i in range(len(exTime)):
@@ -2495,17 +2790,21 @@ if __name__ == "__main__":
         if int(exTime[i]/24) % 5 == 1:
             exPwr[i] = exPwr[i] * 0.1
 
-    results = simulate_ocean_alkalinity_enhancement(
-        ranges=res1,
-        oae_config=OAEInputs(),
-        seawater_config=SeaWaterInputs(),
-        rca=RCALoadingCalculator(oae=OAEInputs(),
-                                 seawater=SeaWaterInputs()),
-        power_profile=exPwr,
-        initial_tank_volume_m3=0,
-    )
+    df = pd.read_csv("/Users/kbrunik/github/HOPP/examples/mCC/puget_sound/outputs/n_admiralty_inlet_generation_profile_wind_and_tidal.csv")
+    # take df column "wind_generation_profile_kW" and convert to W
+    exPwr = df["generation_profile_kW"].values * 1000  # Convert kW to W
 
-    run_ocean_alkalinity_enhancement_physics_model(
+    # results = simulate_ocean_alkalinity_enhancement(
+    #     ranges=res1,
+    #     oae_config=OAEInputs(),
+    #     seawater_config=SeaWaterInputs(),
+    #     rca=RCALoadingCalculator(oae=OAEInputs(),
+    #                              seawater=SeaWaterInputs()),
+    #     power_profile=exPwr,
+    #     initial_tank_volume_m3=0,
+    # )
+
+    range, res = run_ocean_alkalinity_enhancement_physics_model(
         power_profile_w=exPwr,
         initial_tank_volume_m3=0,
         oae_config=OAEInputs(),
@@ -2516,5 +2815,16 @@ if __name__ == "__main__":
         save_plots=True,
         show_plots=True,
         save_outputs=True,
+        output_dir="./outputs/wind_and_tidal/",
 
     )
+
+    print(res.M_disposed_yr, "M_rev_yr")
+
+    OAECostInputs(mass_product=res.M_rev_yr,
+                  value_product=res.X_rev_yr,
+                  waste_mass=res.M_disposed_yr,
+                  waste_disposal_cost=res.X_disp,
+                  avg_base_added_seawater=res.mol_OH_yr,
+                  base_added_seawater_max_power=res.mol_OH_yr_MaxPwr,
+                  mass_rca=res.slurry_mass_max,)
