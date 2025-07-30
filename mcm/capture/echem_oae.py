@@ -41,6 +41,7 @@ class OAEInputs:
         N_edMax (int): Maximum number of ED units. Default is 10.
         E_HCl (float): Energy required per mole of HCl (kWh/mol). Computed if not given.
         E_NaOH (float): Energy required per mole of NaOH (kWh/mol). Computed if not given.
+        assumed_CDR_rate (float): Assumed carbon dioxide removal rate (CDR) per mole of NAOH (mol/mol). Default is 0.8 moles.
         Q_edMax (float): Max ED system flow rate (m³/s). Default is based on empirical values.
         Q_OMax (float): Max overall intake flow (m³/s). Derived from ED flow if not provided.
         frac_EDflow (float): Fraction of total flow treated by ED. Computed if not given.
@@ -59,6 +60,7 @@ class OAEInputs:
     N_edMax: int = field(default=10, validator=gt_zero)
     E_HCl: float = field(default=None)
     E_NaOH: float = field(default=None)
+    assumed_CDR_rate: float = field(default=0.8)
     Q_edMax: float = field(default=(660 + 495) / 1000 / 60*1, validator=gt_zero)
     Q_OMax: float = field(default=None)
     frac_EDflow: float = field(default=None)
@@ -747,6 +749,7 @@ def initialize_power_chemical_ranges(
         "volExcessAcid",
         "mol_OH",
         "mol_HCl",
+        "mass_CO2_absorbed",
         "pH_f",
         "dic_f",
         "ta_f",
@@ -812,6 +815,7 @@ def initialize_power_chemical_ranges(
         SAL_b = n_sal_b / p.pumpB.Q # (mol/m3) concentration of nacl after base formation
         S1["c_b"][i] = C_b / 1000  # (mol/L) Base concentration from ED units
         S1["mol_OH"][i] = C_b * p.pumpB.Q * 3600 # (mol) OH added to seawater
+        S1["mass_CO2_absorbed"][i] = (oae_config.assumed_CDR_rate * S1["mol_OH"][i]*44/ 1000) # (kg) CO2 absorbed by the system
 
         # Base Addition
         p.pumpI.Q = p.pumpO.Q - p.pumpED.Q  # Intake remaining after diversion to ED
@@ -971,6 +975,7 @@ def initialize_power_chemical_ranges(
         
         S3["c_b"][i] = C_b / 1000  # (mol/L) Base concentration used in S3
         S3["mol_OH"][i] = p.pumpB.Q * C_b * 3600 # (mol) OH added to seawater in S3
+        S3["mass_CO2_absorbed"][i] = (oae_config.assumed_CDR_rate * S3["mol_OH"][i]*44/ 1000) # (kg) CO2 absorbed by the system
 
         # Find TA Before Base Addition
         TA_i = ta_i * 1000  # (mol/m3)
@@ -1226,6 +1231,7 @@ def initialize_power_chemical_ranges(
         # Amount of base added for OAE
         Q_bOAE = S2_ranges[i, 0] * Q_ed1 * oae_config.frac_baseFlow  # flow rate used for OAE
         S2["mol_OH"][i] = C_b * Q_bOAE * 3600  # (mol) OH added to seawater
+        S2["mass_CO2_absorbed"][i] = (oae_config.assumed_CDR_rate * S2["mol_OH"][i]*44/ 1000) # (kg) CO2 absorbed by the system
 
         # Base addition to tank
         Q_bT = p.pumpB.Q - Q_bOAE  # (m3/s) flow rate of base to tank
@@ -1368,6 +1374,7 @@ def initialize_power_chemical_ranges(
     S5["volExcessAcid"] = 0  # No acid generated
     S5["volBase"] = 0  # No base generated
     S5["mol_OH"] = 0  # No base addition
+    S5["mass_CO2_absorbed"] = 0  # No CO2 absorbed
     S5["mol_HCl"] = 0  # No excess acid generated
     S5["pH_f"] = pH_i  # No changes in sea pH
     S5["dic_f"] = dic_i  # (mol/L) No changes in sea DIC
@@ -1448,6 +1455,7 @@ class OAEOutputs:
                 - tank_vol_b (array): Volume of base in the tank at each time step (m³).
                 - mol_OH (array): Moles of OH added to seawater at each time step (mol).
                 - mol_HCl (array): Moles of excess acid generated at each time step (mol).
+                - mass_CO2_absorbed (array): Mass of CO2 absorbed at each time step (kg).
                 - pH_f (array): Final pH at each time step.
                 - dic_f (array): Final dissolved inorganic carbon concentration at each time step.
                 - ta_f (array): Final total alkalinity at each time step (mol/L).
@@ -1477,8 +1485,8 @@ class OAEOutputs:
         M_disposed_yr (float): Mass of Products Disposed (tonnes/yr).
         X_disp (float): Cost of disposing of hazardous waste ($/ton).
         X_rev_yr (float): Value of Products Made ($/yr).
-        M_co2est (float): Estimated mass of products captured over the year (tonne).
-        M_co2cap (float): Mass of CO2 captured over the year (tonne).
+        M_co2est (float): Estimated carbon dioxide removal (CDR) over the year (tonnes).
+        M_co2cap (float): Estimated maximum carbon dioxide removal over the year (tonnes).
         max_tank_fill_percent (float): Maximum percentage of the tank that was filled with acid during simulation.
         max_tank_fill_m3 (float): Maximum volume of the tank that was filled with acid during simulation (m³).
         overall_capacity_factor (float): Overall capcity factor (times system is on).
@@ -1562,6 +1570,7 @@ def simulate_ocean_alkalinity_enhancement(
         "tank_vol_a",  # (m³) Volume of acid in the tank at each time
         "mol_OH",  # (mol) Moles of OH added to seawater at each time
         "mol_HCl",  # (mol) Moles of excess acid generated at each time
+        "mass_CO2_absorbed",  # (kg) Mass of CO2 absorbed at each time
         "pH_f",  # Final pH at each time
         "dic_f",  # (mol/L) Final DIC at each time
         "ta_f",  # (mol/L) Final total alkalinity at each time
@@ -1596,6 +1605,7 @@ def simulate_ocean_alkalinity_enhancement(
             OAE_outputs["volBase"][i] = ranges.S1["volBase"][i_ed]
             OAE_outputs["volAcid"][i] = ranges.S1["volAcid"][i_ed]
             OAE_outputs["mol_OH"][i] = ranges.S1["mol_OH"][i_ed]
+            OAE_outputs["mass_CO2_absorbed"][i] = ranges.S1["mass_CO2_absorbed"][i_ed]
             OAE_outputs["mol_HCl"][i] = ranges.S1["mol_HCl"][i_ed]
             OAE_outputs["pH_f"][i] = ranges.S1["pH_f"][i_ed]
             OAE_outputs["dic_f"][i] = ranges.S1["dic_f"][i_ed]
@@ -1676,6 +1686,7 @@ def simulate_ocean_alkalinity_enhancement(
             OAE_outputs["volBase"][i] = ranges.S2["volBase"][i_s2]
             OAE_outputs["volAcid"][i] = ranges.S2["volAcid"][i_s2]
             OAE_outputs["mol_OH"][i] = ranges.S2["mol_OH"][i_s2]
+            OAE_outputs["mass_CO2_absorbed"][i] = ranges.S2["mass_CO2_absorbed"][i_s2]
             OAE_outputs["mol_HCl"][i] = ranges.S2["mol_HCl"][i_s2]
             OAE_outputs["pH_f"][i] = ranges.S2["pH_f"][i_s2]
             OAE_outputs["dic_f"][i] = ranges.S2["dic_f"][i_s2]
@@ -1735,6 +1746,7 @@ def simulate_ocean_alkalinity_enhancement(
             OAE_outputs["volBase"][i] = ranges.S3["volBase"][i_ed]
             OAE_outputs["volAcid"][i] = ranges.S3["volAcid"][i_ed]
             OAE_outputs["mol_OH"][i] = ranges.S3["mol_OH"][i_ed]
+            OAE_outputs["mass_CO2_absorbed"][i] = ranges.S3["mass_CO2_absorbed"][i_ed]
             OAE_outputs["mol_HCl"][i] = ranges.S3["mol_HCl"][i_ed]
             OAE_outputs["pH_f"][i] = ranges.S3["pH_f"][i_ed]
             OAE_outputs["dic_f"][i] = ranges.S3["dic_f"][i_ed]
@@ -1793,6 +1805,7 @@ def simulate_ocean_alkalinity_enhancement(
             OAE_outputs["volBase"][i] = ranges.S4["volBase"][i_ed]
             OAE_outputs["volAcid"][i] = ranges.S4["volAcid"][i_ed]
             OAE_outputs["mol_OH"][i] = ranges.S4["mol_OH"][i_ed]
+            OAE_outputs["mass_CO2_absorbed"][i] = ranges.S4["mass_CO2_absorbed"][i_ed]
             OAE_outputs["mol_HCl"][i] = ranges.S4["mol_HCl"][i_ed]
             OAE_outputs["pH_f"][i] = ranges.S4["pH_f"][i_ed]
             OAE_outputs["dic_f"][i] = ranges.S4["dic_f"][i_ed]
@@ -1840,6 +1853,7 @@ def simulate_ocean_alkalinity_enhancement(
             OAE_outputs["volBase"][i] = ranges.S5["volBase"]
             OAE_outputs["volAcid"][i] = ranges.S5["volAcid"].item()
             OAE_outputs["mol_OH"][i] = ranges.S5["mol_OH"]
+            OAE_outputs["mass_CO2_absorbed"][i] = ranges.S5["mass_CO2_absorbed"]
             OAE_outputs["mol_HCl"][i] = ranges.S5["mol_HCl"]
             OAE_outputs["pH_f"][i] = ranges.S5["pH_f"]
             OAE_outputs["dic_f"][i] = ranges.S5["dic_f"]
@@ -1886,7 +1900,7 @@ def simulate_ocean_alkalinity_enhancement(
 
     # Totals
     # Total moles of alkalinity added
-    mol_OH_total = sum(OAE_outputs["mol_OH"])  
+    mol_OH_total = sum(OAE_outputs["mol_OH"])
 
     # Total moles of excess acid generated
     mol_HCl_total = sum(OAE_outputs["mol_HCl"])
@@ -1899,14 +1913,14 @@ def simulate_ocean_alkalinity_enhancement(
     mol_OH_yr = mol_OH_total # mol/yr
 
     # Approximation for CDR Scale
-    N_co2est = 0.8 * mol_OH_yr # (mol CO2/yr) Estimated moles of CO2 absorbed
+    N_co2est = oae_config.assumed_CDR_rate * mol_OH_yr # (mol CO2/yr) Estimated moles of CO2 absorbed
     M_co2est = N_co2est * 44 /1000000 # (tCO2/yr) Estimated mass of CO2 absorbed
 
-    # Approximation for CDR capacity
+    # Approximation for MAX CDR capacity
     # Yearly alkalinity addition under constant max power conditions
     mol_OH_yr_MaxPwr = OH_max_addition_mol * 8760  # mol/yr
-    N_co2cap = 0.8 * mol_OH_yr_MaxPwr # (mol CO2/yr) Estimated moles of CO2 absorbed
-    M_co2cap = N_co2cap * 44 /1000000 # (tCO2/yr) Estimated mass of CO2 absorbed
+    N_co2cap = oae_config.assumed_CDR_rate * mol_OH_yr_MaxPwr # (mol CO2/yr) Estimated moles of maximum possible CO2 absorbed
+    M_co2cap = N_co2cap * 44 /1000000 # (tCO2/yr) Estimated mass of maximum possible CO2 absorbed
 
     # Average pH, DIC, and sal of effluent when OAE is done
     pH_oae = [p for i, p in enumerate(OAE_outputs["pH_f"]) if p != seawater_config.pH_i]
@@ -2163,6 +2177,7 @@ def run_ocean_alkalinity_enhancement_physics_model(
                 "Concentration of Base Made (mol/L)": res.OAE_outputs["c_b"],
                 "Moles of Base Added to Seawater (mol)": res.OAE_outputs["mol_OH"],
                 "Moles of Excess Acid Generated (mol)": res.OAE_outputs["mol_HCl"],
+                "Mass of CO2 Absorbed (kg)": res.OAE_outputs["mass_CO2_absorbed"],
                 "Volume of Excess Acid (m3)": res.OAE_outputs["volExcessAcid"],
                 "Base Tank Volume (m3)": res.OAE_outputs["tank_vol_b"],
                 "Base Added Volume (m3)": res.OAE_outputs["volBase"],
@@ -2257,6 +2272,9 @@ def run_ocean_alkalinity_enhancement_physics_model(
             scenNA = np.concatenate(
                 [getattr(ranges, key)["mol_HCl"] for key in ["S1", "S2", "S3", "S4"]]
             )
+            scenCDR = np.concatenate(
+                [getattr(ranges, key)["mass_CO2_absorbed"] for key in ["S1", "S2", "S3", "S4"]]
+            )
             scenVolExcessAcid = np.concatenate(
                 [getattr(ranges, key)["volExcessAcid"] for key in ["S1", "S2", "S3", "S4"]]
             )
@@ -2298,6 +2316,7 @@ def run_ocean_alkalinity_enhancement_physics_model(
                 "ED Units Used to Fill Tanks": scenEDtank,
                 "Power Needed (W)": scenPwr,
                 "Rate of Base Added to Seawater (molOH/hr)":scenNB,
+                "Rate of CO2 Absorbed (kgCO2/hr)": scenCDR,
                 "Rate of Excess Acid Generated (molHCl/hr)":scenNA,
                 "Rate of Excess Acid Produced (m3/hr)":scenVolExcessAcid,
                 "Volume of Base Added to Tanks (m3)":scenVolBase,
@@ -2764,7 +2783,7 @@ def oae_cost_model(
 
     
 if __name__ == "__main__":
-    # test = OAEInputs()
+    test = OAEInputs()
 
     # res1 = initialize_power_chemical_ranges(
     #     oae_config=OAEInputs(),
@@ -2815,7 +2834,7 @@ if __name__ == "__main__":
         save_plots=True,
         show_plots=True,
         save_outputs=True,
-        output_dir="./outputs/wind_and_tidal/",
+        # output_dir="./outputs/wind_and_tidal/",
 
     )
 
