@@ -12,6 +12,7 @@ dependencies = [
     "matplotlib",
     "numpy",
     "pandas",
+    "PyCO2SYS"
 ]
 keywords = [
     "python3",
