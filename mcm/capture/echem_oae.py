@@ -1592,7 +1592,7 @@ def simulate_ocean_alkalinity_enhancement(
     tank_vol_b[0] = round(initial_tank_volume_m3,2)
 
     tank_vol_a = np.zeros(len(power_profile)+1)
-    tank_vol_b[0] = round(initial_tank_volume_m3,2)
+    tank_vol_a[0] = round(initial_tank_volume_m3,2)
 
     # Define the array names
     keys = [
@@ -2357,7 +2357,7 @@ def run_ocean_alkalinity_enhancement_physics_model(
                 "Rate of Excess Acid Generated (molHCl/hr)":scenNA,
                 "Rate of Excess Acid Produced (m3/hr)":scenVolExcessAcid,
                 "Volume of Base Added to Tanks (m3)":scenVolBase,
-                "Volume of Excess Acid Produced (m3)":scenVolAcid, 
+                "Volume of Acid Added to Tanks (m3)":scenVolAcid, 
                 "Mass of Alkaline Solid Used of Acid Disposal (g)":scenMadSolid,
                 "Ratio of Alkaline Solid to Acid for Neutralization (g/L)":scenAlk2Acid, 
                 "RCA Power (W)": scenRCApower,
@@ -2552,8 +2552,8 @@ class OAECosts:
         waste_disposal_cost (float): Cost of waste disposal ($/tonne).
         estimated_cdr (float): Estimated Carbon Dioxide Removal (CDR) in tonnes/yr.
         base_added_seawater_max_power (float): Base added to seawater under 100% max power (molOH/yr).
-        mass_rca (float): Mass of RCA tumbler slurry (g).
         acid_disposal_method (float): Method of acid disposal, with options "sell rca", "sell acid" or "acid disposal". Defaults to "sell rca".
+        mass_rca (Optional float): Mass of RCA tumbler slurry (g).
 
         ed_system_cost (float): Capital cost of the electrodialysis (ED) system ($).
         bop_cost (float): Balance of plant cost, including pumps, tanks, and filtration systems ($).
@@ -2593,11 +2593,11 @@ class OAECosts:
     waste_disposal_cost: float = field()
     estimated_cdr: float = field(validator=gt_zero)
     base_added_seawater_max_power: float = field(validator=gt_zero)
-    mass_rca: Optional[float] = field(default=None)
     acid_disposal_method: str = field(default="sell acid", validator=contains(["sell acid", "sell rca", "acid disposal"]))
+    mass_rca: Optional[float] = field(default=None)
 
     # --- Direct Capital Costs ---
-    ed_system_cost: float = field(default=1_819_238, validator=gt_zero)  # $
+    ed_system_cost: float = field(default=1_819_238/1.8, validator=gt_zero)  # $
     bop_cost: float = field(default=1_243_308, validator=gt_zero)        # $
     import_tariff: float = field(default=26_839, validator=gt_zero)      # $
     transportation_cost: float = field(default=146_446, validator=gt_zero)  # $
@@ -2608,7 +2608,7 @@ class OAECosts:
     land_cost_per_m2: float = field(default=38.0, validator=gt_zero)         # $/m²
 
     # --- Technical Operating Costs (Annual) ---
-    annual_energy_cost: float = field(default=1_000_000, validator=gt_zero)       # $/yr
+    annual_energy_cost: float = field(default=5618.45*221.5, validator=gt_zero)       # $/yr
     annual_raw_materials_cost: float = field(default=139_708, validator=gt_zero)  # $/yr
     annual_labor_cost: float = field(default=228_000, validator=gt_zero)          # $/yr
     annual_lab_qc_rd_cost: float = field(default=10_000, validator=gt_zero)       # $/yr
@@ -2646,7 +2646,7 @@ class OAECosts:
 
         # Default values before scaling for comparison
         default_vals = {
-            "ed_system_cost": 1_819_238,
+            "ed_system_cost": 1_819_238/1.8,
             "bop_cost": 1_243_308,
             "import_tariff": 26_839,
             "transportation_cost": 146_446,
@@ -2888,6 +2888,8 @@ class OAECosts:
         # Final value
         carbon_credit_value = carbon_credit_solution.root
 
+        print(carbon_credit_value)
+
         if carbon_credit_value >=0:
             base_revenue = (self.mass_product * self.value_product) + self.estimated_cdr * carbon_credit_value
         else:
@@ -2968,7 +2970,7 @@ if __name__ == "__main__":
     exTime = np.zeros(24 * days)  # Example time in hours
     for i in range(len(exTime)):
         exTime[i] = i + 1
-    maxPwr = 400 * 10**4 # W
+    maxPwr = 500 * 10**4 # W
     Amp = maxPwr/2
     periodT = 24 
     movUp = Amp
@@ -2979,9 +2981,9 @@ if __name__ == "__main__":
         if int(exTime[i]/24) % 5 == 1:
             exPwr[i] = exPwr[i] * 0.1
 
-    df = pd.read_csv("/Users/kbrunik/github/HOPP/examples/mCC/puget_sound/outputs/n_admiralty_inlet_generation_profile_wind_and_tidal.csv")
-    # take df column "wind_generation_profile_kW" and convert to W
-    exPwr = df["generation_profile_kW"].values * 1000  # Convert kW to W
+    # df = pd.read_csv("/Users/kbrunik/github/HOPP/examples/mCC/puget_sound/outputs/n_admiralty_inlet_generation_profile_wind_and_tidal.csv")
+    # # take df column "wind_generation_profile_kW" and convert to W
+    # exPwr = df["generation_profile_kW"].values * 1000  # Convert kW to W
 
     # results = simulate_ocean_alkalinity_enhancement(
     #     ranges=res1,
@@ -2993,9 +2995,10 @@ if __name__ == "__main__":
     #     initial_tank_volume_m3=0,
     # )
 
+    print(exPwr[0])
     ranges, res = run_ocean_alkalinity_enhancement_physics_model(
         power_profile_w=exPwr,
-        power_capacity_w=500*10**4,
+        power_capacity_w=maxPwr,
         initial_tank_volume_m3=0,
         oae_config=OAEInputs(),
         pump_config=PumpInputs(),
@@ -3003,8 +3006,9 @@ if __name__ == "__main__":
         rca=RCALoadingCalculator(oae=OAEInputs(),
                                  seawater=SeaWaterInputs()),
         save_plots=True,
-        show_plots=False,
+        show_plots=True,
         save_outputs=True,
+        plot_range=[0,24]
         # output_dir="./outputs/wind_and_tidal/",
 
     )
