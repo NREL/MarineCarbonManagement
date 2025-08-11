@@ -2555,6 +2555,8 @@ class OAECosts:
         acid_disposal_method (float): Method of acid disposal, with options "sell rca", "sell acid" or "acid disposal". Defaults to "sell rca".
         mass_rca (Optional float): Mass of RCA tumbler slurry (g).
 
+        save_path
+
         ed_system_cost (float): Capital cost of the electrodialysis (ED) system ($).
         bop_cost (float): Balance of plant cost, including pumps, tanks, and filtration systems ($).
         import_tariff (float): Import tariff on foreign equipment ($).
@@ -2676,7 +2678,7 @@ class OAECosts:
     def npv_objective(
             self, 
             carbon_credit_value,
-            lifetime_annual_operating_costs,
+            lifetime_annual_operating_cost,
             annual_depreciation,
             annual_interest_payment,
             lifetime_annual_loan_repayment
@@ -2692,7 +2694,7 @@ class OAECosts:
         annual_revenue = base_revenue * (1 + self.inflation_rate) ** np.arange(years)
 
         # --- EBITDA ---
-        ebitda = annual_revenue - lifetime_annual_operating_costs
+        ebitda = annual_revenue - lifetime_annual_operating_cost
 
         # --- Taxable income ---
         taxable_income = ebitda - annual_depreciation - annual_interest_payment
@@ -2872,7 +2874,7 @@ class OAECosts:
         def npv_objective_for_credit(carbon_credit_value, target_npv):
             return self.npv_objective(
                 carbon_credit_value,
-                lifetime_annual_operating_costs=average_opex,
+                lifetime_annual_operating_cost=lifetime_annual_operating_cost,
                 annual_depreciation=annual_depreciation,
                 annual_interest_payment=interest_payments[:self.plant_lifetime_yrs],
                 lifetime_annual_loan_repayment=lifetime_annual_loan_repayment[:self.plant_lifetime_yrs]
@@ -2887,8 +2889,6 @@ class OAECosts:
 
         # Final value
         carbon_credit_value = carbon_credit_solution.root
-
-        print(carbon_credit_value)
 
         if carbon_credit_value >=0:
             base_revenue = (self.mass_product * self.value_product) + self.estimated_cdr * carbon_credit_value
@@ -2948,6 +2948,71 @@ class OAECosts:
         else:
             cumulative_dcf = np.cumsum(lifetime_discounted_cash_flow)
             payback_time = next((i + 1 for i, val in enumerate(cumulative_dcf) if val >= 0), self.plant_lifetime_yrs)
+
+        # Prepare results dictionary
+        results = {
+            "Estimated CDR (0.8 mol CO2:NaOH) (tCO2/yr)": round(self.estimated_cdr, 2),
+            "Method of Acid Disposal": self.acid_disposal_method, 
+            "Yearly Energy Cost ($/yr)": round(self.annual_energy_cost, 2),
+            "Capital Cost for ED System ($)": round(self.ed_system_cost, 2),
+            "Capital Cost for BOP System ($)": round(self.bop_cost, 2),
+            "Import Tariff Cost for Imported Equipment ($)": round(self.import_tariff, 2),
+            "Transportation Cost for Equipment ($)": round(self.transportation_cost, 2),
+            "Yard Improvements and Civil Works ($)": round(self.yard_improvements_cost, 2),
+            "Laboratory Equipment Cost ($)": round(self.lab_equipment_cost, 2),
+            "Piping System Cost ($)": round(self.piping_system_cost, 2),
+            "Total Land Area Required (m²)": round(self.land_area_m2, 2),
+            "Cost of Land ($/m²)": round(self.land_cost_per_m2, 2),
+            "Annual Raw Materials Cost ($/yr)": round(self.annual_raw_materials_cost, 2),
+            "Annual Labor Cost ($/yr)": round(self.annual_labor_cost, 2),
+            "Annual Lab/QC/R&D Cost ($/yr)": round(self.annual_lab_qc_rd_cost, 2),
+            "Annual Consumables Cost ($/yr)": round(self.annual_consumables_cost, 2),
+            "Annual Waste Treatment or Disposal Cost ($/yr)": round(self.waste_mass * self.waste_disposal_cost, 2),
+            "Annual Transport Cost ($/yr)": round(self.annual_transport_cost, 2),
+            "Annual Miscellaneous Cost (Marketing & Administration) ($/yr)": round(self.annual_misc_cost, 2),
+            "Annual Running Royalties Cost ($/yr)": round(self.annual_royalty_cost, 2),
+            "Startup Costs ($)": round(self.startup_cost, 2),
+            "Upfront R&D Costs ($)": round(self.upfront_rd_cost, 2),
+            "Upfront Royalties Costs ($)": round(self.upfront_royalty_cost, 2),
+            "Number of Membrane Replacements over Plant Lifetime": self.num_membrane_replacements,
+            "Plant Lifetime (Years)": self.plant_lifetime_yrs,
+            "Learning Rate (%)": round(self.learning_rate * 100, 2),
+            "Rate of Inflation (%)": round(self.inflation_rate * 100, 2),
+            "Recovery Period of Investment (Years)": self.recovery_period_yrs,
+            "Rate of Interest (%)": round(self.interest_rate * 100, 2),
+            "Corporate Tax Rate (%)": round(self.corporate_tax_rate * 100, 2),
+            "Salvage Rate (%)": round(self.salvage_value_percent * 100, 2),
+            "Opportunity Cost of Capital (%)": round(self.opportunity_cost_capital * 100, 2),
+            "Direct Plant Costs ($)": round(direct_plant_costs, 2),
+            "Indirect Plant Costs ($)": round(indirect_plant_cost, 2),
+            "Direct Fixed Capital Cost ($)": round(direct_fixed_capital_cost, 2),
+            "Working Capital Cost ($)": round(working_capital_cost, 2),
+            "Capital Cost (CAPEX) ($)": round(capital_cost, 2),
+            "Annual Operating Cost ($/yr)": round(annual_operating_cost, 2),
+            "Average Annual Operating Cost ($/yr)": round(average_opex, 2),
+            "Average Co-Product Revenue ($/yr)": round(average_co_product_revenue, 2),
+            "Average Discounted Cash Flow ($/yr)": round(average_discounted_cash_flow, 2),
+            "Average Taxes ($/yr)": round(average_taxes, 2),
+            "Profitability Index (PI)": round(pi, 2),
+            "Carbon Credit Value ($/tCO2)": round(carbon_credit_value, 2),
+            "Net Present Value (NPV) ($)": round(npv, 2),
+            "Discounted Payback Time (Years)": round(payback_time, 2),
+        }
+
+        if  save_outputs:
+            save_paths = [output_dir + "figures/", output_dir + "data/"]
+
+            for savepath in save_paths:
+                if not os.path.exists(savepath):
+                    os.makedirs(savepath)
+
+            results_df = pd.DataFrame(results,index=[0]).T
+            results_df = results_df.reset_index()
+            results_df.columns = ["Parameter", "Values"]
+
+            results_df.to_csv(
+                save_paths[1] + "OAE_resultsCosts.csv", index=False
+            )
                 
     def run_costs_without_energy(self):
         return
@@ -2981,10 +3046,6 @@ if __name__ == "__main__":
         if int(exTime[i]/24) % 5 == 1:
             exPwr[i] = exPwr[i] * 0.1
 
-    # df = pd.read_csv("/Users/kbrunik/github/HOPP/examples/mCC/puget_sound/outputs/n_admiralty_inlet_generation_profile_wind_and_tidal.csv")
-    # # take df column "wind_generation_profile_kW" and convert to W
-    # exPwr = df["generation_profile_kW"].values * 1000  # Convert kW to W
-
     # results = simulate_ocean_alkalinity_enhancement(
     #     ranges=res1,
     #     oae_config=OAEInputs(),
@@ -2995,7 +3056,6 @@ if __name__ == "__main__":
     #     initial_tank_volume_m3=0,
     # )
 
-    print(exPwr[0])
     ranges, res = run_ocean_alkalinity_enhancement_physics_model(
         power_profile_w=exPwr,
         power_capacity_w=maxPwr,
@@ -3008,8 +3068,6 @@ if __name__ == "__main__":
         save_plots=True,
         show_plots=True,
         save_outputs=True,
-        plot_range=[0,24]
-        # output_dir="./outputs/wind_and_tidal/",
 
     )
 
@@ -3022,4 +3080,4 @@ if __name__ == "__main__":
                 #   mass_rca=res.slurry_mass_max,
                   )
 
-    costs.run()
+    costs.run(save_outputs=True)
