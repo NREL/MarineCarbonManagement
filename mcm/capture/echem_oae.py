@@ -1,4 +1,11 @@
-"""Model of electrochemical mCC system"""
+"""Model of electrochemical ocean alkalinity enhancement system. Inputs based on Ferella (2025).
+
+Citation:
+    Ferella, Francesco, et al. "Ocean Alkalinity Enhancement Using Bipolar Membrane Electrodialysis: 
+        Technical Analysis and Cost Breakdown of a Full-Scale Plant." 
+        Industrial & Engineering Chemistry Research 64.13 (2025): 7085-7099.
+        https://doi.org/10.1021/acs.iecr.4c04364
+"""
 
 __author__ = "James Niffenegger, Kaitlin Brunik"
 __copyright__ = "Copyright 2024, National Renewable Energy Laboratory"
@@ -14,7 +21,8 @@ import PyCO2SYS as pyco2
 import matplotlib.pyplot as plt
 
 from attrs import define, field
-from typing import Tuple
+from typing import Tuple, Optional
+from scipy.optimize import root_scalar
 
 from mcm.utilities.validators import range_val, gt_zero, contains
 from mcm.utilities.utilities import (
@@ -37,40 +45,40 @@ class OAEInputs:
         P_ed1 (float): Power per ED unit (W). Calculated from P_edMax and N_edMax if not provided.
         Q_ed1 (float): Flow rate per ED unit (m³/s). Calculated if not provided.
         N_edMin (int): Minimum number of ED units. Default is 1.
-        P_edMax (float): Total ED system power (W). Default is 2.5 MW.
+        P_edMax (float): Total ED system power (W). Default is 3.5 MW.
         N_edMax (int): Maximum number of ED units. Default is 10.
         E_HCl (float): Energy required per mole of HCl (kWh/mol). Computed if not given.
         E_NaOH (float): Energy required per mole of NaOH (kWh/mol). Computed if not given.
         assumed_CDR_rate (float): Assumed carbon dioxide removal rate (CDR) per mole of NAOH (mol/mol). Default is 0.8 moles.
-        Q_edMax (float): Max ED system flow rate (m³/s). Default is based on empirical values.
+        Q_edMax (float): Max ED system flow rate (m³/s). Default is based on empirical values ~0.0324.
         Q_OMax (float): Max overall intake flow (m³/s). Derived from ED flow if not provided.
         frac_EDflow (float): Fraction of total flow treated by ED. Computed if not given.
-        frac_baseFlow (float): Fraction of ED-treated flow that becomes base. Default is ~0.571.
+        frac_baseFlow (float): Fraction of ED-treated flow that becomes base. Default is 0.5.
         frac_acidFlow (float): Fraction of ED-treated flow producing acid. Computed as 1 - frac_baseFlow.
-        c_a (float): Concentration of generated acid (mol/L). Default is 0.9.
-        c_b (float): Concentration of generated base (mol/L). Default is 0.7.
+        c_a (float): Concentration of generated acid (mol/L). Default is 0.49.
+        c_b (float): Concentration of generated base (mol/L). Default is 0.54.
         use_storage_tanks (bool): Whether storage tanks are used. Default is True.
         store_hours (float): Storage duration (h). Set to 0 if tanks are disabled.
-        acid_disposal_method (str): Acid disposal strategy. Must be one of ["sell acid"].
+        acid_disposal_method (str): Acid disposal strategy. Must be one of ["sell acid","sell rca","acid disposal"].
     """
     P_ed1: float = field(default=None)
     Q_ed1: float = field(default=None)
     N_edMin: int = field(default=1, validator=gt_zero)
-    P_edMax: float = field(default=250*10**4, validator=gt_zero)
+    P_edMax: float = field(default=350*10**4, validator=gt_zero)
     N_edMax: int = field(default=10, validator=gt_zero)
     E_HCl: float = field(default=None)
     E_NaOH: float = field(default=None)
     assumed_CDR_rate: float = field(default=0.8)
-    Q_edMax: float = field(default=(660 + 495) / 1000 / 60*1, validator=gt_zero)
+    Q_edMax: float = field(default=(194.4)/1000/60*10, validator=gt_zero)
     Q_OMax: float = field(default=None)
     frac_EDflow: float = field(default=None)
-    frac_baseFlow: float = field(default=660 / (660 + 495), validator=range_val(0, 1))
+    frac_baseFlow: float = field(default=1/2, validator=range_val(0, 1))
     frac_acidFlow: float = field(default=None)
-    c_a: float = 0.9
-    c_b: float = 0.7
+    c_a: float = 0.49
+    c_b: float = 0.54
     use_storage_tanks: bool = field(default=True)
     store_hours: float = field(default=12)
-    acid_disposal_method: str = field(default="sell rca", validator=contains(["sell acid", "sell rca", "acid disposal"]))
+    acid_disposal_method: str = field(default="sell acid", validator=contains(["sell acid", "sell rca", "acid disposal"]))
 
     def __attrs_post_init__(self):
         # Calculate per-unit power and flow if not set
@@ -116,8 +124,8 @@ class SeaWaterInputs:
     Represents the initial inputs and derived parameters for seawater chemistry.
 
     Attributes:
-        tempC (float): Average ambient seawater temperature in °C. Default is 25°C.
-        sal (float): Average salinity in ppt. Default is equivalent to 1.2 mol/kg.
+        tempC (float): Average ambient seawater temperature in °C. Default is 10.0°C.
+        sal (float): Average salinity in ppt. Default is equivalent to 1.3 mol/kg.
         desal_temp_delta (float): Anticipated temperature increase from desalination in °C. Default is 2°C.
         ed_temp_delta (float): Anticipated temperature increase from ED in °C. Default is 2°C.
         dic_i (float): Initial DIC concentration in mol/L. Default is 2.2e-3 mol/L.
@@ -132,10 +140,10 @@ class SeaWaterInputs:
         ta_i (float): Total alkalinity in mol/L.
         ca_i (float): Total calcium concentration in mol/L.
     """
-    tempC: float = 23.0
+    tempC: float = 10.0
     desal_temp_delta: float = 2.0
     ed_temp_delta: float = 2.0 
-    sal_ppt_i: float = sal_m_to_ppt(1.2)
+    sal_ppt_i: float = sal_m_to_ppt(1.3)
     dic_i: float = 2*2.2e-3
     pH_i: float = 8.1
 
@@ -194,34 +202,34 @@ class PumpInputs:
     A class to define the input parameters for various pumps in the system.
 
     Attributes:
-        y_pump (float): The constant efficiency of the pump. Default is 0.9.
-        p_o_min_bar (float): The minimum pressure (in bar) for seawater intake with filtration. Default is 0.1.
-        p_o_max_bar (float): The maximum pressure (in bar) for seawater intake with filtration. Default is 0.5.
-        p_ed_min_bar (float): The minimum pressure (in bar) for ED (Electrodialysis) units. Default is 0.1.
-        p_ed_max_bar (float): The maximum pressure (in bar) for ED (Electrodialysis) units. Default is 0.5.
-        p_a_min_bar (float): The minimum pressure (in bar) for pumping acid. Default is 0.1.
-        p_a_max_bar (float): The maximum pressure (in bar) for pumping acid. Default is 0.5.
+        y_pump (float): The constant efficiency of the pump. Default is 0.8.
+        p_o_min_bar (float): The minimum pressure (in bar) for seawater intake with filtration. Default is 0.15.
+        p_o_max_bar (float): The maximum pressure (in bar) for seawater intake with filtration. Default is 1.5.
+        p_ed_min_bar (float): The minimum pressure (in bar) for ED (Electrodialysis) units. Default is 0.12.
+        p_ed_max_bar (float): The maximum pressure (in bar) for ED (Electrodialysis) units. Default is 1.2.
+        p_a_min_bar (float): The minimum pressure (in bar) for pumping acid. Default is 0.16.
+        p_a_max_bar (float): The maximum pressure (in bar) for pumping acid. Default is 1.6.
         p_i_min_bar (float): The minimum pressure (in bar) for pumping seawater for acid addition. Default is 0.
         p_i_max_bar (float): The maximum pressure (in bar) for pumping seawater for acid addition. Default is 0.
-        p_b_min_bar (float): The minimum pressure (in bar) for pumping base. Default is 0.1.
-        p_b_max_bar (float): The maximum pressure (in bar) for pumping base. Default is 0.5.
-        p_f_min_bar (float): The minimum pressure (in bar) for released seawater. Default is 0.
-        p_f_max_bar (float): The maximum pressure (in bar) for released seawater. Default is 0.
+        p_b_min_bar (float): The minimum pressure (in bar) for pumping base. Default is 0.69.
+        p_b_max_bar (float): The maximum pressure (in bar) for pumping base. Default is 6.9.
+        p_f_min_bar (float): The minimum pressure (in bar) for released seawater. Default is 0.2.
+        p_f_max_bar (float): The maximum pressure (in bar) for released seawater. Default is 2.
     """
 
-    y_pump: float = 0.65
-    p_o_min_bar: float = 0.1
-    p_o_max_bar: float = 0.4
-    p_ed_min_bar: float = 0.1
-    p_ed_max_bar: float = 0.8
-    p_a_min_bar: float = 0.1
-    p_a_max_bar: float = 0.8
+    y_pump: float = 0.8
+    p_o_min_bar: float = 0.15
+    p_o_max_bar: float = 1.5
+    p_ed_min_bar: float = 0.12
+    p_ed_max_bar: float = 1.2
+    p_a_min_bar: float = 0.16
+    p_a_max_bar: float = 1.6
     p_i_min_bar: float = 0
     p_i_max_bar: float = 0
-    p_b_min_bar: float = 0.1
-    p_b_max_bar: float = 0.8
-    p_f_min_bar: float = 0
-    p_f_max_bar: float = 0
+    p_b_min_bar: float = 0.69
+    p_b_max_bar: float = 6.9
+    p_f_min_bar: float = 0.2
+    p_f_max_bar: float = 2
 
 @define
 class Pump:
@@ -465,6 +473,9 @@ class RCALoadingCalculator:
 
     # RCA properties (constants)
     mm_cao: float = 56.1  # g/mol
+    c_h2o = 4.18 # J/g-K, specific heat capacity of water
+    c_rca = 0.75 # J/g-K, specific heat capacity of rock
+    dH_cao = -186 * 10**3 # J/mol, enthalpy of neutralizing HCl with CaO
 
     # Private result attributes
     _w_final: float = field(default=None, init=False)
@@ -473,12 +484,15 @@ class RCALoadingCalculator:
     _sal_final: float = field(default=None, init=False)
     _ta_final: float = field(default=None, init=False)
     _sal_a: float = field(default=None, init=False)
+    _temp_final: float = field(default=None, init=False)
+    _temp_change: float = field(default=None, init=False)
 
     def compute_acid_props(self):
         """Compute pH, salinity, TA, and Ca of the acid before RCA addition."""
         sal_a = self.seawater.sal_i - self.oae.c_a
         sal_a_ppt = sal_m_to_ppt(sal_a)
         ph_a = -math.log10(self.oae.c_a)
+        tempC_a = self.seawater.tempC_i + self.seawater.ed_temp_delta #(C) temp of acid solution
 
         kwargs = dict(
             par1=self.seawater.dic_iu, 
@@ -486,14 +500,19 @@ class RCALoadingCalculator:
             par1_type=2, 
             par2_type=3,
             salinity=sal_a_ppt,
-            temperature=self.seawater.tempC_i
+            temperature=tempC_a
         )
         results = pyco2.sys(**kwargs)
 
         ta_a = umol_per_kg_to_m(results['alkalinity'])
         ca_a = umol_per_kg_to_m(results['total_calcium'])
 
-        return ph_a, sal_a, sal_a_ppt, ta_a, ca_a
+        # Temperature considerations
+        tempC_r = tempC_a # (C) assume rocks have the same temperature as the acid initially
+        tempK_a = tempC_a + 273.15  # Temperature in Kelvin
+        tempK_r = tempC_r + 273.15  # Temperature in Kelvin 
+
+        return ph_a, sal_a, sal_a_ppt, ta_a, ca_a, tempK_a, tempK_r
 
     def get_target_ta(self, sal_ppt):
         """Get target total alkalinity at the final pH."""
@@ -513,7 +532,7 @@ class RCALoadingCalculator:
         """Estimate RCA loading ignoring added Ca2+."""
         return self.mm_cao * (ta_target - ta_a) / (2 * self.frac_cao * self.frac_dissolved)
 
-    def simulate_rca_effect(self, w_rca, ta_a, ca_a, sal_a):
+    def simulate_rca_effect(self, w_rca, ta_a, ca_a, sal_a, temp_K_a, tempK_r):
         """Simulate resulting solution properties after RCA addition."""
         w_cao_d = self.frac_cao * self.frac_dissolved * w_rca
         mol_cao = w_cao_d / self.mm_cao
@@ -527,28 +546,33 @@ class RCALoadingCalculator:
         ca_umolkg = m_to_umol_per_kg(ca_new)
         sal_ppt = sal_m_to_ppt(sal_new)
 
+        # Find temperature change
+        w_rcaF = self.frac_sellable_rca*(w_rca - w_cao_d)  # (g/L) final loading of rca remaining after the reaction
+        tempK_ad = (-1*self.dH_cao*self.frac_cao + R_H2O*self.c_h2o*temp_K_a +w_rcaF*self.c_rca*tempK_r) / (R_H2O*self.c_h2o + w_rcaF*self.c_rca)
+        tempC_ad = tempK_ad - 273.15  # (C) final temperature
+
         kwargs = dict(
             par1=self.seawater.dic_iu,
             par2=ta_umolkg,
             par1_type=2,
             par2_type=1,
             salinity=sal_ppt,
-            temperature=self.seawater.tempC_i,
+            temperature=tempC_ad,
             total_calcium=ca_umolkg
         )
 
         results = pyco2.sys(**kwargs)
 
-        return results["pH"], ca_new, sal_new, ta_new
+        return results["pH"], ca_new, sal_new, ta_new, tempC_ad
 
-    def find_optimal_rca_loading(self, start, ta_a, ca_a, sal_a, step=0.01, max_range=2):
+    def find_optimal_rca_loading(self, start, ta_a, ca_a, sal_a, tempK_a, tempK_r, step=0.01, max_range=2):
         """Iteratively search for RCA loading that hits target pH."""
         w_vals = np.arange(start, start + max_range, step)
         for w in w_vals:
-            pH, ca, sal, ta = self.simulate_rca_effect(w, ta_a, ca_a, sal_a)
+            pH, ca, sal, ta, tempC = self.simulate_rca_effect(w, ta_a, ca_a, sal_a, tempK_a, tempK_r)
             if abs(pH - self.seawater.pH_i) <= self.tolerance:
-                return w, pH, ca, sal, ta
-        return None, None, None, None, None
+                return w, pH, ca, sal, ta, tempC
+        return None, None, None, None, None, None
 
     def run(self):
         """Main execution method for RCA loading calculation."""
@@ -556,7 +580,7 @@ class RCALoadingCalculator:
             return
 
         # Step 1: Acid system before RCA
-        ph_a, sal_a, sal_a_ppt, ta_a, ca_a = self.compute_acid_props()
+        ph_a, sal_a, sal_a_ppt, ta_a, ca_a, tempK_a, tempK_r = self.compute_acid_props()
 
         # Step 2: Estimate target TA
         ta_target = self.get_target_ta(sal_a_ppt)
@@ -565,17 +589,17 @@ class RCALoadingCalculator:
         w_rca_init = self.estimate_initial_rca(ta_target, ta_a)
 
         # Step 4: Estimate pH from this guess
-        pH_test, _, _, _ = self.simulate_rca_effect(w_rca_init, ta_a, ca_a, sal_a)
+        pH_test, _, _, _, _ = self.simulate_rca_effect(w_rca_init, ta_a, ca_a, sal_a, tempK_a, tempK_r)
 
         # Step 5: Search for RCA loading that achieves target pH
-        w_final, pH_final, ca_final, sal_final, ta_final = self.find_optimal_rca_loading(
-            w_rca_init, ta_a, ca_a, sal_a, step=0.01
+        w_final, pH_final, ca_final, sal_final, ta_final, temp_final = self.find_optimal_rca_loading(
+            w_rca_init, ta_a, ca_a, sal_a, tempK_a, tempK_r, step=0.01
         )
 
         # Step 6: Refine if not found
         if w_final is None:
-            w_final, pH_final, ca_final, sal_final, ta_final = self.find_optimal_rca_loading(
-                w_rca_init, ta_a, ca_a, sal_a, step=0.001
+            w_final, pH_final, ca_final, sal_final, ta_final, temp_final = self.find_optimal_rca_loading(
+                w_rca_init, ta_a, ca_a, sal_a, tempK_a, tempK_r, step=0.001
             )
 
         # Save results to instance
@@ -585,6 +609,8 @@ class RCALoadingCalculator:
         self._sal_final = sal_final
         self._ta_final = ta_final
         self._sal_a = sal_a
+        self._temp_final = temp_final
+        self._temp_change = temp_final - (tempK_a-273.15)  # Temperature change in C
 
     @property
     def results(self) -> dict:
@@ -597,6 +623,8 @@ class RCALoadingCalculator:
                 - "final_Ca_M": Final calcium concentration in M.
                 - "final_salinity_M": Final salinity in M.
                 - "final_TA_M": Final total alkalinity in M.
+                - "final_temp_C": Final temperature in °C.
+                - "temp_change_C": Temperature change due to RCA addition in °C.
                 - "sal_a": Salinity of acid before RCA addition in M.
         """
         if self._w_final is None:
@@ -608,6 +636,8 @@ class RCALoadingCalculator:
             "final_Ca_M": self._ca_final,
             "final_salinity_M": self._sal_final,
             "final_TA_M": self._ta_final,
+            "final_temp_C": self._temp_final,
+            "temp_change_C": self._temp_change,
             "sal_a": self._sal_a,
         }
 
@@ -883,9 +913,10 @@ def initialize_power_chemical_ranges(
             ca_fu = m_to_umol_per_kg(S1["ca_f"][i]) # (umol/kg)
 
             # Find new temperature
-            tempC_mix = (p.pumpI.Q*seawater_config.tempC_i + (p.pumpB.Q+p.pumpA.Q)
-                         *(seawater_config.tempC_i+seawater_config.ed_temp_delta)
-                         )/(p.pumpI.Q + p.pumpB.Q + p.pumpA.Q)
+            tempC_mix = (p.pumpI.Q * seawater_config.tempC_i + p.pumpB.Q
+                        * (seawater_config.tempC_i + seawater_config.ed_temp_delta)
+                        + p.pumpA.Q *rca.results["final_temp_C"]
+                        ) / (p.pumpI.Q + p.pumpB.Q + p.pumpA.Q)
 
             # Define input conditions for mixing the alkaline seawater and neutralized acid
             kwargs = dict(
@@ -1044,8 +1075,9 @@ def initialize_power_chemical_ranges(
 
             # Find new temperature
             tempC_mix = (p.pumpI.Q*seawater_config.tempC_i 
-                         + (p.pumpB.Q+p.pumpA.Q)
+                         + p.pumpB.Q
                          *(seawater_config.tempC_i+seawater_config.ed_temp_delta)
+                         + p.pumpA.Q * rca.results["final_temp_C"]
                          )/(p.pumpI.Q + p.pumpB.Q + p.pumpA.Q)
 
             # Define input conditions for mixing the alkaline seawater and neutralized acid
@@ -1312,9 +1344,10 @@ def initialize_power_chemical_ranges(
 
             # Find new temperature
             tempC_mix = (p.pumpI.Q*seawater_config.tempC_i 
-                         + (Q_bOAE+Q_aRCA)
-                         * (seawater_config.tempC_i+seawater_config.ed_temp_delta)
-                         )/(p.pumpI.Q + Q_bOAE + Q_aRCA)
+                        + Q_bOAE
+                        * (seawater_config.tempC_i+seawater_config.ed_temp_delta)
+                        + Q_aRCA*rca.results["final_temp_C"]
+                        )/(p.pumpI.Q + Q_bOAE + Q_aRCA)
 
             # Define input conditions for mixing the base and brine
             kwargs = dict(
@@ -1527,6 +1560,7 @@ def simulate_ocean_alkalinity_enhancement(
     seawater_config: SeaWaterInputs,
     rca: RCALoadingCalculator,
     power_profile,
+    power_capacity,
     initial_tank_volume_m3,
 ):
     """
@@ -1540,6 +1574,7 @@ def simulate_ocean_alkalinity_enhancement(
         seawater_config (SeaWaterInputs): Configuration inputs for the seawater properties.
         rca (RCALoadingCalculator): Calculator for the loading of alkaline solid in the RCA process.
         power_profile (np.ndarray): Array representing the available power at each time step (W).
+        power_capacity (float): Maximum power capacity of the power system (W).
         initial_tank_volume_m3 (float): The initial volume of acid and base in the tanks (m³).
 
     Returns:
@@ -1983,7 +2018,7 @@ def simulate_ocean_alkalinity_enhancement(
     OAEcapFact = mol_OH_yr/mol_OH_yr_MaxPwr
 
     # Print and determine the energy capacity factor (compare energy availability with max if max power always available)
-    EcapFact = sum(power_profile[0:8760]) / (max(power_profile)*8760) 
+    EcapFact = sum(power_profile[0:8760]) / (power_capacity*8760) 
 
     return OAEOutputs(
         OAE_outputs=OAE_outputs,
@@ -2043,6 +2078,7 @@ class BioGeoChemOutputs:
 
 def run_ocean_alkalinity_enhancement_physics_model(
     power_profile_w,
+    power_capacity_w,
     initial_tank_volume_m3,
     oae_config: OAEInputs,
     pump_config: PumpInputs,
@@ -2089,6 +2125,7 @@ def run_ocean_alkalinity_enhancement_physics_model(
         seawater_config=seawater_config,
         rca=rca,
         power_profile=power_profile_w,
+        power_capacity= power_capacity_w,
         initial_tank_volume_m3=initial_tank_volume_m3,
     )
 
@@ -2342,6 +2379,7 @@ def run_ocean_alkalinity_enhancement_physics_model(
                 "Average pH of Effluent": round(res.pH_avg,2),
                 "Average DIC of Effluent (M)": res.dic_avg, 
                 "Average TA of Effluent (M)": res.ta_avg,
+                "Average Temperature of Effluent (C)": round(res.tempC_avg,2),
                 "Average Salinity of Effluent (ppt)": round(res.sal_avg,2),
                 "Average Volume of Effluent (m3/yr)": round(res.volOAEbase_yr,2),
                 "Min Total Power Need for OAE (W)": round(min(ranges.S3["pwrRanges"]),2),
@@ -2392,6 +2430,22 @@ def run_ocean_alkalinity_enhancement_physics_model(
             biogeochemDF = pd.DataFrame(biogeochem_results)
             biogeochemDF.to_csv(
                 save_paths[1] + "OAE_biogeochemResults.csv", index=False
+            )
+
+            biogeochem_hourly = {
+                "Hour": np.arange(0, len(res.OAE_outputs["Qout"])),
+                "Flow Rate of Alkaline Seawater (m3/s)": res.OAE_outputs["Qout"],
+                "pH of Alkaline Seawater": res.OAE_outputs["pH_f"],
+                "DIC of Alkaline Seawater (mol/m3)": res.OAE_outputs["dic_f"]*10**6,
+                "TA of Alkaline Seawater (mol/m3)": res.OAE_outputs["ta_f"]*10**6,
+                "Calcium of Alkaline Seawater (mol/m3)": res.OAE_outputs["ca_f"]*10**6,
+                "Salinity of Alkaline Seawater (ppt)": res.OAE_outputs["sal_f"],
+                "Temperature of Alkaline Seawater (C)": res.OAE_outputs["temp_f"],
+            }
+
+            biogeochem_hourlyDF = pd.DataFrame(biogeochem_hourly)
+            biogeochem_hourlyDF.to_csv(
+                save_paths[1] + "OAE_biogeochem_hourly_results.csv", index=False
             )
 
     if save_plots or show_plots:
@@ -2488,15 +2542,15 @@ def run_ocean_alkalinity_enhancement_physics_model(
         return (ranges, res)
     
 @define
-class OAECostInputs:
-    """Inputs for the ocean alkalinity enhancement cost model.
+class OAECosts:
+    """Computes the costs of an Ocean Alkalinity Enhancement (OAE) system.
 
     Attributes:
         mass_product (float): Mass of products made (tonnes/yr).
         value_product(float): Value of products ($/tonne).
         waste_mass (float): Mass of waste made (tonnes/yr).
         waste_disposal_cost (float): Cost of waste disposal ($/tonne).
-        avg_base_added_seawater (float): Average moles of base added to seawater (molOH/yr).
+        estimated_cdr (float): Estimated Carbon Dioxide Removal (CDR) in tonnes/yr.
         base_added_seawater_max_power (float): Base added to seawater under 100% max power (molOH/yr).
         mass_rca (float): Mass of RCA tumbler slurry (g).
         acid_disposal_method (float): Method of acid disposal, with options "sell rca", "sell acid" or "acid disposal". Defaults to "sell rca".
@@ -2525,19 +2579,22 @@ class OAECostInputs:
 
         num_membrane_replacements (int): Total number of ED membrane replacements over the plant lifetime.
         plant_lifetime_yrs (int): Operational lifetime of the plant (years).
+        learning_rate (float): Learning rate for cost reduction as a decimal (e.g., 0.37 for 37%).
         inflation_rate (float): Annual inflation rate as a decimal (e.g., 0.015 for 1.5%).
         recovery_period_yrs (int): Financial recovery period for investment returns (years).
         interest_rate (float): Annual interest rate used in financial calculations (decimal).
         corporate_tax_rate (float): Corporate tax rate applied to net profits (decimal).
+        salvage_value_percent (float): Percentage of capital costs recovered at the end of the plant lifetime (decimal).
+        opportunity_cost_capital (float): Opportunity cost of capital as a decimal (e.g., 0.06 for 6%).
     """
-    mass_product: float = field(validator=gt_zero)
-    value_product: float = field(validator=gt_zero)
+    mass_product: float = field()
+    value_product: float = field()
     waste_mass: float = field()
-    waste_disposal_cost: float = field(validator=gt_zero)
-    avg_base_added_seawater: float = field(validator=gt_zero)
+    waste_disposal_cost: float = field()
+    estimated_cdr: float = field(validator=gt_zero)
     base_added_seawater_max_power: float = field(validator=gt_zero)
-    mass_rca: float = field(validator=gt_zero)
-    acid_disposal_method: str = field(default="sell rca", validator=contains(["sell acid", "sell rca", "acid disposal"]))
+    mass_rca: Optional[float] = field(default=None)
+    acid_disposal_method: str = field(default="sell acid", validator=contains(["sell acid", "sell rca", "acid disposal"]))
 
     # --- Direct Capital Costs ---
     ed_system_cost: float = field(default=1_819_238, validator=gt_zero)  # $
@@ -2551,6 +2608,7 @@ class OAECostInputs:
     land_cost_per_m2: float = field(default=38.0, validator=gt_zero)         # $/m²
 
     # --- Technical Operating Costs (Annual) ---
+    annual_energy_cost: float = field(default=1_000_000, validator=gt_zero)       # $/yr
     annual_raw_materials_cost: float = field(default=139_708, validator=gt_zero)  # $/yr
     annual_labor_cost: float = field(default=228_000, validator=gt_zero)          # $/yr
     annual_lab_qc_rd_cost: float = field(default=10_000, validator=gt_zero)       # $/yr
@@ -2567,10 +2625,15 @@ class OAECostInputs:
     # --- Fixed Inputs ---
     num_membrane_replacements: int = field(default=6, validator=gt_zero)
     plant_lifetime_yrs: int = field(default=20, validator=gt_zero)
+    learning_rate: int = field(default=0.37, validator=range_val(0.0, 1.0))
     inflation_rate: float = field(default=0.015, validator=range_val(0.0, 1.0))
     recovery_period_yrs: int = field(default=10, validator=gt_zero)
     interest_rate: float = field(default=0.0425, validator=range_val(0.0, 1.0))
     corporate_tax_rate: float = field(default=0.2984, validator=range_val(0.0, 1.0))
+    salvage_value_percent: float = field(default=0, validator=range_val(0.0, 1.0))
+    opportunity_cost_capital: float = field(default=0.06, validator=range_val(0.0, 1.0))
+
+    b: float = field(init=False)
 
     def __attrs_post_init__(self):
         # Constants from Ferella 2025
@@ -2578,9 +2641,8 @@ class OAECostInputs:
         N_naoh100 = self.base_added_seawater_max_power
         N_naohEq = cf_lit * N_naoh100
         N_naohLit = 24_948_000  # mol/year
-        lr = 0.20
-        b = -1 * math.log2(1 - lr)
-        f_adj = (N_naohEq / N_naohLit) ** (1 - b)
+        self.b = -1 * math.log2(1 - self.learning_rate)
+        f_adj = (N_naohEq / N_naohLit) ** (1 - self.b)
 
         # Default values before scaling for comparison
         default_vals = {
@@ -2606,192 +2668,300 @@ class OAECostInputs:
             if getattr(self, field_name) == base_val:
                 setattr(self, field_name, base_val * f_adj)
 
+        if self.acid_disposal_method == "sell rca" and not hasattr(self, "mass_rca"):
+            if self.mass_rca is None:
+                raise ValueError("`mass_rca` must be provided when `acid_disposal_method` is 'sell rca'")
 
-@define
-class OAECostOutputs:
-    """
-    Outputs from the electrodialysis cost model. If default cost model is used all costs are in 2023 USD.
+    # Optimization using adaptation of Excel's Goal Seek Function
+    def npv_objective(
+            self, 
+            carbon_credit_value,
+            lifetime_annual_operating_costs,
+            annual_depreciation,
+            annual_interest_payment,
+            lifetime_annual_loan_repayment
+            ):
 
-    Attributes:
-        initial_capital_cost (float): Total initial capital cost of the electrodialysis system.
-        yearly_capital_cost (float): Yearly capital cost for the electrodialysis system.
-        yearly_operational_cost (float): Yearly operational cost excluding energy costs for the electrodialysis system.
-        initial_bop_capital_cost (float): Initial capital cost for the Balance of Plant (BOP).
-        yearly_bop_capital_cost (float): Yearly capital cost for the BOP.
-        yearly_bop_operational_cost (float): Yearly operational cost for the BOP, excluding energy costs.
-        initial_ed_capital_cost (float): Initial capital cost for the electrodialysis unit.
-        yearly_ed_capital_cost (float): Yearly capital cost for the electrodialysis unit.
-        yearly_ed_operational_cost (float): Yearly operational cost for the electrodialysis unit, excluding energy costs.
-        initial_tank_capital_cost (float): Initial capital cost of the tanks.
-        yearly_tank_cost (float): Yearly capital cost for the tanks.
-    """
+        years = self.plant_lifetime_yrs
 
-    initial_capital_cost: float
-    yearly_capital_cost: float
-    yearly_operational_cost: float
-    initial_bop_capital_cost: float
-    yearly_bop_capital_cost: float
-    yearly_bop_operational_cost: float
-    initial_ed_capital_cost: float
-    yearly_ed_capital_cost: float
-    yearly_ed_operational_cost: float
-    initial_tank_capital_cost: float
-    yearly_tank_cost: float
-
-
-def oae_cost_model(
-    cost_config: OAECostInputs,
-    save_outputs=False,
-    output_dir="./output/",
-) -> OAECostOutputs:
-    """
-    Calculates the costs associated with electrodialysis based on user inputs or default literature values.
-
-    Args:
-        cost_config (ElectrodialysisCostInputs): Configuration object containing user-defined or default inputs
-                                                 for the electrodialysis cost model. Includes infrastructure type,
-                                                 yearly CO2 capture, and cost settings.
-
-    Returns:
-        ElectrodialysisCostOutputs: Object containing calculated capital and operational costs,
-                                    both initial and yearly, for the electrodialysis system.
-
-    Calculation Logic:
-        - If `user_costs` is True, the model directly uses the costs provided by the user.
-        - If `user_costs` is False, the model calculates costs using default values from literature,
-          applying learning rates and amortization as necessary.
-        - The infrastructure type ('desal', 'swCool', or 'new') determines the baseline costs, which
-          are then adjusted based on the modeled CO2 capture capacity.
-
-    Raises:
-        ValueError: If the `infrastructure_type` is not one of 'desal', 'swCool', or 'new'.
-    """
-    ed = cost_config.electrodialysis_inputs
-
-    if cost_config.user_costs:
-        # Use user-provided costs
-        CEyr = cost_config.yearly_capital_cost
-        BOPcapYr = cost_config.yearly_bop_capital_cost
-        EDcapYr = cost_config.yearly_ed_capital_cost
-        OEnoEyr = cost_config.yearly_operational_cost
-        BOPopNoEyr = cost_config.yearly_bop_operational_cost
-        EDopNoEyr = cost_config.yearly_ed_operational_cost
-        CEi = cost_config.initial_capital_cost
-        BOPcapI = cost_config.initial_bop_capital_cost
-        EDcapI = cost_config.initial_ed_capital_cost
-    else:
-        infra_costs = {
-            "desal": (253, 197, 204, 159, 48, 39),
-            "swCool": (512, 263, 466, 228, 46, 35),
-            "new": (1484, 530, 1434, 509, 49, 21),
-        }
-        if cost_config.infrastructure_type not in infra_costs:
-            raise ValueError(
-                "`infrastructure_type` must be 'desal', 'swCool', or 'new'"
-            )
-
-        CEco2, OEnoEco2, BOPcapCo2, BOPopNoEco2, EDcapCo2, EDopNoEco2 = infra_costs[
-            cost_config.infrastructure_type
-        ]
-
-        # Amortization
-        r_int = 0.05  # Rate of interest or return (5%)
-        n_pay = 12  # Number of monthly payments in a year (12)
-        t_amor = 20  # (years) Amortization time (20 years)
-        amort_factor = (1 - (1 + r_int / n_pay) ** (-n_pay * t_amor)) / r_int
-
-        tankCapI = (
-            cost_config.cost_per_unit_volume_tanks * cost_config.total_tank_volume
-        )  # (2023$) total cost of tanks
-        cpCO2_Tanks = (
-            tankCapI / cost_config.mCC_yr
-        )  # (2023$/tCO2) cost of tanks per tCO2 captured yearly
-        tankCapYr = tankCapI / amort_factor
-
-        # Apply learning rate
-        lr = 0.2  # learning rate assumed to be 20% (20% is considered a fast learning rate for DAC, 15% is common for desal, and ~9-12% is common for offshore wind)
-        capFactLit = (
-            0.934  # Capacity factor from literature needed for capital cost (93.4%)
+        # --- Revenue ---
+        base_revenue = (
+            self.mass_product * self.value_product 
+            + self.estimated_cdr * carbon_credit_value
         )
-        mCC_yr_lit = 20 * ed.co2_mm / 1000 * capFactLit * 24 * 365
-        mCC_yr_mod = cost_config.max_theoretical_mCC * capFactLit * 24 * 365
-        b = -math.log2(1 - lr)
-        CEco2Mod = CEco2 * (mCC_yr_mod / mCC_yr_lit) ** (-b)
-        BOPcapCo2Mod = BOPcapCo2 * (mCC_yr_mod / mCC_yr_lit) ** (-b)
-        EDcapCo2Mod = EDcapCo2 * (mCC_yr_mod / mCC_yr_lit) ** (-b)
+        annual_revenue = base_revenue * (1 + self.inflation_rate) ** np.arange(years)
 
-        # Calculate Yearly CapEx
-        CEyr = CEco2Mod * mCC_yr_mod + tankCapYr
-        BOPcapYr = BOPcapCo2Mod * mCC_yr_mod + tankCapYr
-        EDcapYr = EDcapCo2Mod * mCC_yr_mod
+        # --- EBITDA ---
+        ebitda = annual_revenue - lifetime_annual_operating_costs
 
-        # Calculate Yearly OpEx
-        OEnoEyr = OEnoEco2 * cost_config.mCC_yr
-        BOPopNoEyr = BOPopNoEco2 * cost_config.mCC_yr
-        EDopNoEyr = EDopNoEco2 * cost_config.mCC_yr
+        # --- Taxable income ---
+        taxable_income = ebitda - annual_depreciation - annual_interest_payment
 
-        # Calculate Initial CapEx
-        CEi = CEyr * amort_factor
-        BOPcapI = BOPcapYr * amort_factor
-        EDcapI = EDcapYr * amort_factor
+        # --- Tax loss carry forward ---
+        tax_loss = np.zeros(years + 1)
+        for i in range(years):
+            tax_loss[i + 1] = min(tax_loss[i] + taxable_income[i], 0)
 
-    if save_outputs:
-        save_paths = [output_dir + "figures/", output_dir + "data/"]
+        # --- Taxes ---
+        taxes = np.maximum(
+            self.corporate_tax_rate * (taxable_income + tax_loss[1:]),
+            0
+        )
 
-        for savepath in save_paths:
-            if not os.path.exists(savepath):
-                os.makedirs(savepath)
-        # Totals for Simulations
-        cost_result = {
-            "Infrastructure Type": cost_config.infrastructure_type,
-            "Initial Capital Cost (2023$/yr)": CEi,
-            "Yearly Capital Cost (2023$/yr)": CEyr,
-            "Yearly Operational Cost (Not Including Energy Costs) (2023$/yr)": OEnoEyr,
-            "Total Yearly Cost (Not Including Electricity Costs) (2023$/yr)": CEyr
-            + OEnoEyr,
-            "Total Yearly Cost (Not Including Electricity Costs) (2023$/tCO2)": (
-                CEyr + OEnoEyr
-            )
-            / cost_config.mCC_yr,
-            "Initial ED Capital Cost (2023$)": EDcapI,
-            "Yearly ED Cost (Without Electricity Costs) (2023$/yr)": EDcapYr
-            + EDopNoEyr,
-            "Initial BOP Capital Cost (2023$)": BOPcapI,
-            "Yearly BOP Cost (Without Electricity Costs) (2023$/yr)": BOPcapYr
-            + BOPopNoEyr,
-            "Tank Capital Cost (2023$)": tankCapI,
-            "Yearly Tank Cost (2023$/yr)": tankCapYr,
-        }
-        totsDF = pd.DataFrame(cost_result, index=[0]).T
-        totsDF = totsDF.reset_index()
-        totsDF.columns = ["Parameter", "Values"]
-        totsDF.to_csv(save_paths[1] + "DOC_cost_results.csv")
+        # --- Net cash flow ---
+        net_cash_flow = ebitda - lifetime_annual_loan_repayment - taxes
 
-    return OAECostOutputs(
-        initial_capital_cost=CEi,
-        yearly_capital_cost=CEyr,
-        yearly_operational_cost=OEnoEyr,
-        initial_bop_capital_cost=BOPcapI,
-        yearly_bop_capital_cost=BOPcapYr,
-        yearly_bop_operational_cost=BOPopNoEyr,
-        initial_ed_capital_cost=EDcapI,
-        yearly_ed_capital_cost=EDcapYr,
-        yearly_ed_operational_cost=EDopNoEyr,
-        initial_tank_capital_cost=tankCapI,
-        yearly_tank_cost=tankCapYr,
-    )
+        # --- Discounted cash flow ---
+        discount_factors = (1 + self.opportunity_cost_capital) ** np.arange(1, years + 1)
+        discounted_cash_flow = net_cash_flow / discount_factors
+
+        # --- Net Present Value ---
+        return np.sum(discounted_cash_flow)
+
+    def run(self,
+        save_outputs=False,
+        output_dir="./output/",
+    ):
+        """Calculates the costs associated with the Ocean Alkalinity Enhancement (OAE) process.
+        This function computes the initial and yearly costs for the OAE system, including capital and operational costs.
+        """
+
+        if self.acid_disposal_method == "sell rca":
+            # Rotary drum specifications
+            ROT_DRUM_CAPACITY = 14_515 * 1_000     # g - Weight capacity of 6DH rotary drum
+            ROT_DRUM_COST = 120 * 1_000           # $ - Capital cost of one 6DH rotary drum
+            ROT_DRUM_AREA = 30                    # m² - Footprint of the rotary drum
+            ROT_DRUM_LABOR_COST = 30 * 1_000      # $/yr - Entry-level pay for a concrete worker
+
+            # Adjustment factor using same learning rate as rest of model
+            f_adj_rca = (self.mass_rca / ROT_DRUM_CAPACITY) ** (1 - self.b)
+
+            # --- Estimated RCA Costs ---
+            rca_drum_capital_cost = f_adj_rca * ROT_DRUM_COST       # $ - Capital cost
+            rca_area_m2 = f_adj_rca * ROT_DRUM_AREA       # m² - Area requirement
+            rca_labor_cost = f_adj_rca * ROT_DRUM_LABOR_COST  # $/yr - Labor cost
+
+            # --- Update Overall Costs ---
+            self.bop_cost += rca_drum_capital_cost      # Add drum capital cost to BOP capital cost
+            self.land_area_m2 += rca_area_m2     # Increase total plant area
+            self.annual_labor_cost += rca_labor_cost   # Increase total labor costs
+
+        # Plant Direct Costs Intermediate Calculations
+        main_equipment_cost = self.ed_system_cost+self.bop_cost # ($) Main equipment cost
+        auxiliary_equipment_cost = 0.02*main_equipment_cost # ($) Auxiliary equipment cost
+        equipment_cost = main_equipment_cost + auxiliary_equipment_cost # ($) Total equipment cost
+        installation_cost = 0.15 * equipment_cost # ($) Cost for equipment installation
+        instrumentation_cost = 0.09 * equipment_cost # ($) Cost for instrumentation and DCS
+        insulation_cost = 0.005 * equipment_cost # ($) Cost of insulation
+        electrical_cost = 0.03 * equipment_cost # ($) Cost of electrical infrasturcture for plant 
+        building_cost = 0.06 * equipment_cost # ($) Cost of buildings 
+        land_cost = self.land_area_m2 * self.land_cost_per_m2 # ($) Cost of land
+
+        # Plant Direct Costs Final Calculation ($)
+        direct_plant_costs = (
+            equipment_cost
+            +self.import_tariff
+            +self.transportation_cost
+            +self.yard_improvements_cost
+            +self.lab_equipment_cost
+            +installation_cost
+            +self.piping_system_cost
+            +instrumentation_cost
+            +insulation_cost
+            +electrical_cost
+            +building_cost
+            +land_cost
+        )
+
+        # Plant Indirect Costs Intermediate Calculations
+        engineering_procurement_cost = 0.07 * direct_plant_costs # ($) Engineering, procurement, and construction costs
+        start_up_cost = 0.04 * direct_plant_costs # ($) Supervision, start-up, and training costs
+        contingencies_cost = 0.005 * direct_plant_costs # ($) Contingencies cost
+
+        # Plant Indirect Costs Final Calculation ($)
+        indirect_plant_cost = engineering_procurement_cost+start_up_cost+contingencies_cost
+
+        # Technical Operating Cost Intermediate Calculations
+        membrane_cost = self.ed_system_cost/1.5 # ($) Cost of membranes 
+        annual_membrane_replacement_cost = 0 # ($/yr) Yearly cost of membrane replacement
+        for n in range(self.num_membrane_replacements):
+            annual_membrane_replacement_cost = annual_membrane_replacement_cost + (membrane_cost/self.plant_lifetime_yrs * 0.9**(n+1)) # Cost of membranes anticipated to decrease by 10% with each replacement
+        maintainance_repair_cost = 0.008 * direct_plant_costs # ($/yr) Yearly cost of maintenance and repairs 
+        insurance_taxes_cost = 0.004 * direct_plant_costs # ($/yr) Yearly cost of insurances and local taxes
+        annual_facility_dependent_cost = annual_membrane_replacement_cost+maintainance_repair_cost+insurance_taxes_cost # ($/yr) Yearly facility dependent cost
+
+        # Technical Operating Cost Final Calculation ($/yr)
+        annual_operating_cost = (
+            self.annual_raw_materials_cost
+            +self.annual_labor_cost
+            +annual_facility_dependent_cost
+            +self.annual_lab_qc_rd_cost
+            +self.annual_consumables_cost
+            +(self.waste_mass * self.waste_disposal_cost)  # Waste disposal cost
+            +self.annual_energy_cost
+            +self.annual_transport_cost
+            +self.annual_misc_cost
+            +self.annual_royalty_cost
+        )
+
+        # Capital Cost Intermediate Calculations
+        direct_fixed_capital_cost = direct_plant_costs+indirect_plant_cost # ($) Direct fixed capital cost
+        working_capital_cost = (
+            self.annual_raw_materials_cost
+            +self.annual_labor_cost
+            +(self.waste_mass * self.waste_disposal_cost)  # Waste disposal cost
+            +self.annual_energy_cost
+            +self.annual_misc_cost
+        ) # ($) Working capital cost
+
+        # Capital Cost (CAPEX) Final Calculation ($)
+        capital_cost = (
+            direct_fixed_capital_cost
+            +working_capital_cost
+            +self.startup_cost
+            +self.upfront_rd_cost
+            +self.upfront_royalty_cost
+        )
+
+        # Average OPEX or Annual Operating Cost Intermediate Calcualations
+
+        # Yearly techincal operating cost over plant lifetime
+        lifetime_annual_operating_cost = np.zeros(self.plant_lifetime_yrs) 
+        lifetime_annual_operating_cost[0] = annual_operating_cost 
+        for i in range(len(lifetime_annual_operating_cost)-1):
+            lifetime_annual_operating_cost[i+1] = lifetime_annual_operating_cost[i] * (1+self.inflation_rate)
+
+        # Yearly loan repayment (constant) over plant lifetime
+        S_lon = 0 # Sum used in calculation
+        for t in range(self.recovery_period_yrs):
+            S_lon = S_lon + (1+self.interest_rate)**t
+        lifetime_annual_loan_repayment = np.zeros(self.plant_lifetime_yrs)
+        for i in range(self.recovery_period_yrs):
+            lifetime_annual_loan_repayment[i] = capital_cost * (1+self.interest_rate*S_lon)/S_lon
+
+        # Yearly OPEX or annual operating cost over plant lifetime
+        lifetime_annual_opex = np.zeros(self.plant_lifetime_yrs)
+        for i in range(self.plant_lifetime_yrs):
+            lifetime_annual_opex[i] = lifetime_annual_operating_cost[i] + lifetime_annual_loan_repayment[i]
+
+        # Average OPEX or Annual Operating Cost Final Calcualation
+        average_opex = np.mean(lifetime_annual_opex)
+
+        # Loan repayment schedule
+        loan_balance = np.zeros(self.recovery_period_yrs + 1)
+        interest_payments = np.zeros(self.plant_lifetime_yrs)
+        principal_payments = np.zeros(self.recovery_period_yrs)
+
+        loan_balance[0] = capital_cost
+        interest_payments[0] = capital_cost * self.interest_rate
+        principal_payments[0] = lifetime_annual_loan_repayment[0] - interest_payments[0]
+        loan_balance[1] = loan_balance[0] - principal_payments[0]
+
+        for year in range(1, self.recovery_period_yrs):
+            interest_payments[year] = interest_payments[year - 1] - self.interest_rate * principal_payments[year - 1]
+            principal_payments[year] = lifetime_annual_loan_repayment[year] - interest_payments[year]
+            loan_balance[year + 1] = loan_balance[year] - principal_payments[year]
+
+        # Annual depreciation (constant over recovery period)
+        annual_depreciation = np.zeros(self.plant_lifetime_yrs)
+        depreciable_value = (direct_fixed_capital_cost - land_cost) * (1 - self.salvage_value_percent)
+        annual_depreciation[:self.recovery_period_yrs] = depreciable_value / self.recovery_period_yrs
+
+
+        # Define the objective function for root finding
+        def npv_objective_for_credit(carbon_credit_value, target_npv):
+            return self.npv_objective(
+                carbon_credit_value,
+                lifetime_annual_operating_costs=average_opex,
+                annual_depreciation=annual_depreciation,
+                annual_interest_payment=interest_payments[:self.plant_lifetime_yrs],
+                lifetime_annual_loan_repayment=lifetime_annual_loan_repayment[:self.plant_lifetime_yrs]
+            ) - target_npv
+
+        # Solve for carbon credit value that achieves the target NPV
+        carbon_credit_solution = root_scalar(
+            npv_objective_for_credit,
+            args=(0.0,),  # Target NPV value, set to 0 for this case
+            x0=0 # Initial guess for carbon credit value
+        )
+
+        # Final value
+        carbon_credit_value = carbon_credit_solution.root
+
+        if carbon_credit_value >=0:
+            base_revenue = (self.mass_product * self.value_product) + self.estimated_cdr * carbon_credit_value
+        else:
+            base_revenue = (self.mass_product * self.value_product)
+
+        # Yearly revenue of plant ($/yr)
+        lifetime_annual_revenue = np.zeros(self.plant_lifetime_yrs)
+        lifetime_annual_revenue[0] = base_revenue
+        for i in range(len(lifetime_annual_revenue)-1):
+            lifetime_annual_revenue[i+1] = lifetime_annual_revenue[i] * (1+self.inflation_rate)
+        average_revenue = np.mean(lifetime_annual_revenue)
+
+        # Yearly EBITDA ($/yr)
+        lifetime_annual_ebitda = lifetime_annual_revenue - lifetime_annual_operating_cost
+
+        # Yearly Taxable Income ($/yr)
+        lifetime_taxable_income = lifetime_annual_ebitda - annual_depreciation - interest_payments[:self.plant_lifetime_yrs]
+
+        # Yearly Tax Loss Carry Forward ($/yr)
+        lifetime_tax_loss = np.zeros(self.plant_lifetime_yrs + 1)
+        for i in range(self.plant_lifetime_yrs):
+            lifetime_tax_loss[i + 1] = min(lifetime_tax_loss[i] + lifetime_taxable_income[i], 0)
+
+        # Yearly Taxes ($/yr)
+        lifetime_taxes = np.maximum(
+            self.corporate_tax_rate * (lifetime_taxable_income + lifetime_tax_loss[1:]),
+            0
+        )
+        # Yearly Net Cash Flow ($/yr)
+        lifetime_net_cash_flow = lifetime_annual_ebitda - lifetime_annual_loan_repayment - lifetime_taxes
+
+        # Yearly Discounted Cash Flow ($/yr)
+        discount_factors = (1 + self.opportunity_cost_capital) ** np.arange(1, self.plant_lifetime_yrs + 1)
+        lifetime_discounted_cash_flow = lifetime_net_cash_flow / discount_factors
+
+        # Net Present Value ($)
+        npv = np.sum(lifetime_discounted_cash_flow)
+
+        # Profitability Index (PI)
+        pi = npv / capital_cost
+
+        # Average Discounted Cash Flow ($/yr)
+        average_discounted_cash_flow = np.mean(lifetime_discounted_cash_flow)
+
+        # Average Taxes ($/yr)
+        average_taxes = np.mean(lifetime_taxes)
+
+        # Average Co-Product Revenue
+        annual_co_product_revenue = self.mass_product * self.value_product
+        total_co_product_revenue = annual_co_product_revenue * (1 + self.inflation_rate) ** np.arange(self.plant_lifetime_yrs)
+        average_co_product_revenue = np.mean(total_co_product_revenue)
+
+        # Payback time with discount cash flow (years)
+        if round(npv) == 0:
+            payback_time = self.plant_lifetime_yrs
+        else:
+            cumulative_dcf = np.cumsum(lifetime_discounted_cash_flow)
+            payback_time = next((i + 1 for i, val in enumerate(cumulative_dcf) if val >= 0), self.plant_lifetime_yrs)
+                
+    def run_costs_without_energy(self):
+        return
+
 
     
 if __name__ == "__main__":
     test = OAEInputs()
 
-    # res1 = initialize_power_chemical_ranges(
-    #     oae_config=OAEInputs(),
-    #     pump_config=PumpInputs(),
-    #     seawater_config=SeaWaterInputs(),
-    #     rca=RCALoadingCalculator(oae=OAEInputs(),
-    #                              seawater=SeaWaterInputs())
-    # )
+    res1 = initialize_power_chemical_ranges(
+        oae_config=OAEInputs(),
+        pump_config=PumpInputs(),
+        seawater_config=SeaWaterInputs(),
+        rca=RCALoadingCalculator(oae=OAEInputs(),
+                                 seawater=SeaWaterInputs())
+    )
 
     #EXAMPLE: Sin function for power input
     days = 365
@@ -2823,8 +2993,9 @@ if __name__ == "__main__":
     #     initial_tank_volume_m3=0,
     # )
 
-    range, res = run_ocean_alkalinity_enhancement_physics_model(
+    ranges, res = run_ocean_alkalinity_enhancement_physics_model(
         power_profile_w=exPwr,
+        power_capacity_w=500*10**4,
         initial_tank_volume_m3=0,
         oae_config=OAEInputs(),
         pump_config=PumpInputs(),
@@ -2832,18 +3003,19 @@ if __name__ == "__main__":
         rca=RCALoadingCalculator(oae=OAEInputs(),
                                  seawater=SeaWaterInputs()),
         save_plots=True,
-        show_plots=True,
+        show_plots=False,
         save_outputs=True,
         # output_dir="./outputs/wind_and_tidal/",
 
     )
 
-    print(res.M_disposed_yr, "M_rev_yr")
-
-    OAECostInputs(mass_product=res.M_rev_yr,
+    costs= OAECosts(mass_product=res.M_rev_yr,
                   value_product=res.X_rev_yr,
                   waste_mass=res.M_disposed_yr,
                   waste_disposal_cost=res.X_disp,
-                  avg_base_added_seawater=res.mol_OH_yr,
+                  estimated_cdr=res.M_co2est,
                   base_added_seawater_max_power=res.mol_OH_yr_MaxPwr,
-                  mass_rca=res.slurry_mass_max,)
+                #   mass_rca=res.slurry_mass_max,
+                  )
+
+    costs.run()
