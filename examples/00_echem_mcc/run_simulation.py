@@ -4,7 +4,7 @@ import numpy as np
 from hopp.simulation import HoppInterface
 from hopp.utilities import load_yaml
 from hopp.utilities.keys import set_nrel_key_dot_env
-from mcm import echem_mcc
+from mcm.capture import echem_mcc
 
 
 # ----------------------------------- Hybrid Power Simulation ----------------
@@ -360,6 +360,7 @@ print("max power scenario", max(np.concatenate([range_outputs.S1['pwrRanges'], r
 
 print("min s1/s2 for wv power scenario", min(np.concatenate([range_outputs.S1['pwrRanges'], range_outputs.S2['pwrRanges']])))
 
+print("mcc yr", ed_outputs.mCC_yr)
 
 ed_costs = echem_mcc.electrodialysis_cost_model(
     echem_mcc.ElectrodialysisCostInputs(
@@ -372,6 +373,9 @@ ed_costs = echem_mcc.electrodialysis_cost_model(
     save_outputs=True,
     
 )
+
+print("max_theoretical_mCC",range_outputs.V_aT_max + range_outputs.V_bT_max)
+print(max(range_outputs.S1["mCC"]))
 
 
 # -------------------------------------- Cost Results for mCC --------------------------------
