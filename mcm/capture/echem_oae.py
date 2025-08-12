@@ -3013,9 +3013,8 @@ class OAECosts:
             results_df.to_csv(
                 save_paths[1] + "OAE_resultsCosts.csv", index=False
             )
-                
-    def run_costs_without_energy(self):
-        return
+        
+        return results
 
 
     
@@ -3066,7 +3065,7 @@ if __name__ == "__main__":
         rca=RCALoadingCalculator(oae=OAEInputs(),
                                  seawater=SeaWaterInputs()),
         save_plots=True,
-        show_plots=True,
+        show_plots=False,
         save_outputs=True,
 
     )
@@ -3077,7 +3076,9 @@ if __name__ == "__main__":
                   waste_disposal_cost=res.X_disp,
                   estimated_cdr=res.M_co2est,
                   base_added_seawater_max_power=res.mol_OH_yr_MaxPwr,
-                #   mass_rca=res.slurry_mass_max,
+                  mass_rca=res.slurry_mass_max,
                   )
 
-    costs.run(save_outputs=True)
+    results = costs.run(save_outputs=True)
+
+    print(results["Capital Cost (CAPEX) ($)"])
