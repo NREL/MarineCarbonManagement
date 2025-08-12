@@ -2610,7 +2610,7 @@ class OAECosts:
     land_cost_per_m2: float = field(default=38.0, validator=gt_zero)         # $/m²
 
     # --- Technical Operating Costs (Annual) ---
-    annual_energy_cost: float = field(default=5618.45*221.5, validator=gt_zero)       # $/yr
+    annual_energy_cost: float = field(default=5618.45*221.5)       # $/yr
     annual_raw_materials_cost: float = field(default=139_708, validator=gt_zero)  # $/yr
     annual_labor_cost: float = field(default=228_000, validator=gt_zero)          # $/yr
     annual_lab_qc_rd_cost: float = field(default=10_000, validator=gt_zero)       # $/yr
