@@ -2,7 +2,7 @@ import math
 import numpy as np
 from attrs import asdict
 from pytest import approx, fixture
-from mcm import echem_mcc
+from mcm.capture import echem_mcc
 
 
 @fixture

@@ -12,11 +12,13 @@ dependencies = [
     "matplotlib",
     "numpy",
     "pandas",
+    "PyCO2SYS"
 ]
 keywords = [
     "python3",
     "marine-carbon-removal",
     "direct-ocean-capture",
+    "ocean-alkalinity-enhancement",
 ]
 [project.optional-dependencies]
 develop = [
