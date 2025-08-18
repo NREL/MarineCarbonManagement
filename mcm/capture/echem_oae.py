@@ -547,7 +547,7 @@ class RCALoadingCalculator:
         sal_ppt = sal_m_to_ppt(sal_new)
 
         # Find temperature change
-        w_rcaF = self.frac_sellable_rca*(w_rca - w_cao_d)  # (g/L) final loading of rca remaining after the reaction
+        w_rcaF = (w_rca - w_cao_d)  # (g/L) final loading of rca remaining after the reaction
         tempK_ad = (-1*self.dH_cao*self.frac_cao + R_H2O*self.c_h2o*temp_K_a +w_rcaF*self.c_rca*tempK_r) / (R_H2O*self.c_h2o + w_rcaF*self.c_rca)
         tempC_ad = tempK_ad - 273.15  # (C) final temperature
 
